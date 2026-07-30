@@ -1,0 +1,59 @@
+application:
+  name: BrainTumor-Agent
+  version: 0.1.0
+  environment: development
+  api_prefix: /api/v1
+
+storage:
+  data_root: ./runtime/data
+  model_root: ./runtime/models
+  faiss_index_path: ./runtime/faiss
+  max_upload_size_mb: 1024
+
+segmentation:
+  engine: nnunetv2
+  dataset_id: 137
+  configuration: 3d_fullres
+  plans: nnUNetResEncUNetMPlans
+  trainer: nnUNetTrainer
+  folds:
+    - "0"
+    - "1"
+    - "2"
+    - "3"
+    - "4"
+  device: cuda
+  gpu_id: "0"
+  checkpoint: checkpoint_final.pth
+  enabled: true
+  required_modalities:
+    - t1
+    - t1ce
+    - t2
+    - flair
+
+rag:
+  vector_store: faiss
+  embedding_model: BAAI/bge-m3
+  chunk_size: 900
+  chunk_overlap: 150
+  top_k: 5
+  enabled: false
+
+agent:
+  provider: dashscope
+  model: qwen-plus
+  temperature: 0.1
+  max_tokens: 1000
+  allowed_tools:
+    - mri_analyzer
+    - report_generator
+    - medical_rag
+  require_human_review: true
+  enabled: true
+
+report:
+  model: qwen-plus
+  temperature: 0.2
+  max_tokens: 800
+  require_human_review: true

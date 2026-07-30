@@ -1,0 +1,40 @@
+{
+  "documents": [
+    {
+      "file": "who_cns_classification.pdf",
+      "document_id": "who-cns-classification-local",
+      "title": "WHO Classification of Tumours of the Central Nervous System",
+      "source": "WHO/IARC licensed copy",
+      "version": "填写实际版本",
+      "topic": "who_cns",
+      "publication_date": "填写发布日期",
+      "source_url": "填写合法来源页面"
+    },
+    {
+      "file": "nccn_glioma_guideline.pdf",
+      "document_id": "nccn-glioma-guideline-local",
+      "title": "NCCN Guideline - Central Nervous System Cancers",
+      "source": "NCCN licensed copy",
+      "version": "填写实际版本",
+      "topic": "nccn_glioma",
+      "publication_date": "填写发布日期",
+      "source_url": "填写合法来源页面"
+    },
+    {
+      "file": "glioma_mri_review.pdf",
+      "document_id": "glioma-mri-review-local",
+      "title": "Glioma MRI Imaging Review",
+      "source": "填写期刊或机构",
+      "version": "填写实际版本",
+      "topic": "glioma_mri"
+    },
+    {
+      "file": "tumor_follow_up_criteria.pdf",
+      "document_id": "tumor-follow-up-criteria-local",
+      "title": "Brain Tumor Follow-up Response Criteria",
+      "source": "填写期刊或机构",
+      "version": "填写实际版本",
+      "topic": "follow_up_criteria"
+    }
+  ]
+}

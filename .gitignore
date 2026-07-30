@@ -1,0 +1,69 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# JavaScript
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.vite-cache/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and runtime state
+*.log
+logs/
+runtime/
+artifacts/
+reports/
+
+# Medical images and derived data
+*.nii
+*.nii.gz
+*.nrrd
+*.mha
+*.mhd
+*.dcm
+nnUNet_raw/
+nnUNet_preprocessed/
+nnUNet_results/
+
+# Model weights
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+models/*
+!models/README.md
+!models/.gitkeep
+
+# Local configuration overrides
+configs/local*.yaml
+configs/*secret*.yaml
