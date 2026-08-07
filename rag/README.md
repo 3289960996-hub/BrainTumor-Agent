@@ -46,12 +46,13 @@ Copy-Item rag\manifest.example.json runtime\knowledge\manifest.json
 pip install -r requirements.txt
 ```
 
-默认模型为`BAAI/bge-m3`。首次运行会从Hugging Face下载模型；生产环境可预下载到
-受控缓存目录并设置：
+当前CPU Demo使用`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`，
+比BGE-M3更适合无GPU电脑，并能支持中文提问检索英文指南。首次运行会从Hugging
+Face下载模型；离线环境可预下载到受控缓存目录并设置：
 
 ```powershell
-$env:BTA_EMBEDDING_MODEL = "BAAI/bge-m3"
-$env:BTA_EMBEDDING_DEVICE = "cuda"
+$env:BTA_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+$env:BTA_EMBEDDING_DEVICE = "cpu"
 $env:BTA_EMBEDDING_CACHE_DIR = "D:\models\huggingface"
 $env:BTA_EMBEDDING_LOCAL_FILES_ONLY = "true"
 ```
@@ -62,8 +63,9 @@ $env:BTA_EMBEDDING_LOCAL_FILES_ONLY = "true"
 python -m rag.vector_store `
   --pdf-dir "runtime\knowledge\pdfs" `
   --manifest "runtime\knowledge\manifest.json" `
-  --index-dir "runtime\knowledge\faiss" `
-  --device cuda `
+  --index-dir "runtime\faiss" `
+  --model "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2" `
+  --device cpu `
   --batch-size 16
 ```
 
@@ -80,7 +82,7 @@ python -m rag.vector_store `
 
 ```powershell
 python -m rag.retriever `
-  --index-dir "runtime\knowledge\faiss" `
+  --index-dir "runtime\faiss" `
   --query "增强区域在胶质瘤评估中的意义？" `
   --top-k 5
 ```
@@ -89,9 +91,9 @@ python -m rag.retriever `
 
 ```powershell
 python -m rag.retriever `
-  --index-dir "runtime\knowledge\faiss" `
+  --index-dir "runtime\faiss" `
   --query "随访时如何评价病灶变化？" `
-  --topic follow_up_criteria `
+  --topic glioma_mri `
   --json
 ```
 
@@ -100,7 +102,7 @@ python -m rag.retriever `
 ```python
 from rag.retriever import MedicalKnowledgeRetriever
 
-retriever = MedicalKnowledgeRetriever("runtime/knowledge/faiss")
+retriever = MedicalKnowledgeRetriever("runtime/faiss")
 result = retriever.retrieve("增强区域在胶质瘤评估中的意义？", top_k=5)
 
 for chunk in result.chunks:

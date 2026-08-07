@@ -3,10 +3,20 @@
 基于多模态MRI、nnU-Net、医学知识库RAG和Qwen-plus的脑肿瘤智能辅助分析项目。
 
 当前版本已实现BraTS 2021四模态数据处理与阅片、nnU-Net V2训练/推理/评估、
-分割定量分析、Qwen-plus辅助报告、BGE + FAISS医学知识库，以及由LangGraph编排的
-MRI Assistant Agent。FastAPI和React仍为基础骨架，尚未接入完整病例工作流。
+分割定量分析、Qwen-plus辅助报告与医生确认式编辑、多语言Embedding + FAISS医学
+知识库，以及由LangGraph编排的MRI Assistant Agent。FastAPI与React已接通上传、
+分析、病例恢复、报告、问答和证据引用的完整Demo流程。
 
 > 本项目当前仅用于科研和教学，不作为独立临床诊断依据。
+
+## 界面预览
+
+| 影像工作台 | 医学助手 |
+| --- | --- |
+| ![四模态MRI阅片、Mask叠加与定量指标](docs/images/workbench.png) | ![辅助报告与医生确认式编辑](docs/images/medical-assistant.png) |
+
+演示操作见[`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)，系统设计见
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
 ## 项目结构
 
@@ -59,6 +69,8 @@ PowerShell中建议显式使用项目虚拟环境，避免误调用系统Python�
 
 `.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000`
 
+也可以直接运行`.\scripts\start_backend.ps1`。
+
 健康检查地址：
 
 - `http://localhost:8000/api/v1/health`
@@ -80,6 +92,8 @@ PowerShell中建议显式使用项目虚拟环境，避免误调用系统Python�
 
 1. `npm install`
 2. `npm run dev`
+
+也可以在项目根目录直接运行`.\scripts\start_frontend.ps1`。
 
 默认访问地址为`http://localhost:5173`。
 
@@ -120,6 +134,16 @@ Tumor Core、Edema、Enhancing Tumor图层切换。完整参数见`data_process/
 Notebook支持Drive持久化、断点续训、验证和模型导出，并明确区分100 epochs单折
 演示训练与标准1000 epochs五折实验。操作说明见`docs/COLAB_TRAINING.md`。
 
+已有五折权重的GPU推理与Dice验证使用
+[`notebooks/BrainTumor_Agent_UPENN_10_GPU_Validation_Colab.ipynb`](notebooks/BrainTumor_Agent_UPENN_10_GPU_Validation_Colab.ipynb)，
+准备和验收流程见[`docs/COLAB_GPU_VALIDATION.md`](docs/COLAB_GPU_VALIDATION.md)。
+
+2026-08-07在Tesla T4上完成10例UPENN-GBM独立机构队列的fold 0至4集成验证，
+使用`images_segm`专家修正标签，宏平均WT `0.895287`、TC `0.918673`、ET
+`0.862139`。公开的逐病例JSON、CSV、数据许可和实验口径见
+[`docs/validation/upenn-10/`](docs/validation/upenn-10/README.md)。MRI原始数据、模型权重和
+预测Mask不提交到Git。该结果仅属于10例独立外部小样本验证，不代表临床级泛化能力。
+
 ## MRI分割结果分析
 
 `feature_extract/analyzer.py`可从nnU-Net输出mask计算Whole Tumor体积、主要位置、
@@ -136,9 +160,11 @@ Notebook支持Drive持久化、断点续训、验证和模型导出，并明确�
 
 ## 医学影像知识库RAG
 
-`rag`模块支持从获授权医学PDF按页提取文本、递归切分、使用BGE-M3生成向量、
-构建带完整性清单的FAISS索引，并返回包含版本和页码的可追溯医学资料。
-WHO/NCCN资料不会被自动下载或内置；入库和检索命令见`rag/README.md`。
+`rag`模块支持从获授权医学PDF按页提取文本、递归切分、生成多语言向量、构建带
+完整性清单的FAISS索引，并返回包含版本和页码的可追溯医学资料。当前Demo已配置
+CC BY 4.0授权的EANO成人弥漫性胶质瘤指南（2021），使用CPU轻量多语言模型构建
+152个文本块，索引位于`runtime/faiss`。WHO/NCCN资料不会被自动下载或内置；
+入库和检索命令见`rag/README.md`。
 
 ## BrainTumor MRI Assistant
 
@@ -152,7 +178,7 @@ WHO/NCCN资料不会被自动下载或内置；入库和检索命令见`rag/READ
 
 查询医学知识：
 
-`python -m agent.assistant --question "为什么需要关注增强区域？" --rag-index runtime\knowledge\faiss`
+`python -m agent.assistant --question "随访时MRI需要关注哪些变化？" --rag-index runtime\faiss`
 
 完整配置、输入契约、安全边界和Python接口见`agent/README.md`。
 
@@ -171,9 +197,13 @@ WHO/NCCN资料不会被自动下载或内置；入库和检索命令见`rag/READ
 - 模型名称、数据路径、知识索引版本和外部服务地址必须配置化。
 - 生产环境的密钥应由Secret Manager或部署平台注入。
 
+## 许可证
+
+项目源代码采用[MIT License](LICENSE)。数据集、模型权重和医学资料分别遵循其原始
+许可，不随本许可证自动授权。
+
 ## 后续里程碑
 
-1. 完成React病例上传、阅片、AI勾画、报告编辑和证据引用界面。
-2. 将同步GPU分析迁移到Celery任务队列并增加进度查询与取消机制。
-3. 增加患者级数据划分、外部验证和模型/知识库版本审计。
-4. 增加权限控制、脱敏、审计日志和人工审核闭环。
+1. 将同步GPU分析迁移到任务队列并增加进度查询与取消机制。
+2. 扩充获授权指南并增加模型、数据和知识库版本审计。
+3. 增加权限控制、脱敏、审计日志和人工审核闭环。

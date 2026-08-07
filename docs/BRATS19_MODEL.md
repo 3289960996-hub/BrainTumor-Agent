@@ -42,23 +42,29 @@ SHA-256：
 
 ## 重要：自定义标签映射
 
-这个模型不是项目默认的BraTS21连续标签模型。其`dataset.json`定义：
+这个模型不是项目默认的BraTS21连续标签模型。其`dataset.json`名称定义为：
 
 - `0`：background
-- `1`：edema
-- `2`：nonenhancing
+- `1`：edema（元数据名称与checkpoint实际数值语义不一致）
+- `2`：nonenhancing（元数据名称与checkpoint实际数值语义不一致）
 - `3`：empty
 - `4`：enhancing
 
-项目通过`brats19_preserved`输出标签配置将其转换为标准BraTS标签：
+使用与原始输入SHA-256严格匹配的`BraTS2021_00495`真值逐体素复核后确认，
+checkpoint实际保留标准BraTS数值语义：标签1对应nonenhancing，标签2对应edema。
+项目通过`brats19_preserved`输出标签配置保留1、2、4，仅将空类别3转为背景：
 
 - 模型`0 → BraTS 0`
-- 模型`1 → BraTS 2`
-- 模型`2 → BraTS 1`
+- 模型`1 → BraTS 1`
+- 模型`2 → BraTS 2`
 - 模型`3 → BraTS 0`
 - 模型`4 → BraTS 4`
 
-不能使用默认的`standard_nnunet`映射处理该模型，否则增强区域会被错误解释。
+不能只依据`dataset.json`中的类别名称交换标签1和2；否则WT和ET不变，但TC及
+水肿量化会被错误计算。也不能使用默认的`standard_nnunet`映射处理该模型，
+因为默认配置会把内部标签3解释为增强区域。
+
+fold 0单病例修正后独立Dice：WT `0.965846`、TC `0.978066`、ET `0.947714`。
 
 本机`.env`已配置：
 
@@ -94,9 +100,14 @@ python -m segmentation.inference `
 - `nnunet_predictions`保存模型原始五类输出。
 - `brats_predictions`保存统一后的标准BraTS `0/1/2/4` mask。
 
-## 适用范围与限制
+## GPU验证与适用范围
 
-这是外部提供的BraTS19自定义模型包，项目中没有对应的独立验证集指标、训练代码
-版本或临床审核记录。目前只完成了包结构、checkpoint安全加载、网络输出头和标签
-契约验证。本机当前PyTorch为CPU构建，没有执行真实病例推理。投入科研评估前应在
-CUDA环境中对独立BraTS数据重新计算WT、TC、ET Dice；不得直接作为临床诊断依据。
+2026-08-07已在Tesla T4使用fold 0至4集成，对10例UPENN-GBM独立机构队列专家标签
+完成验证，宏平均WT `0.895287`、TC `0.918673`、ET `0.862139`。逐病例指标、
+GPU环境元数据和实验口径见公开验证记录：
+
+[`validation/upenn-10/`](validation/upenn-10/README.md)
+
+这是外部提供的BraTS19自定义模型包，仍缺原始训练代码版本、完整训练数据清单和
+临床审核记录。UPENN结果属于独立机构的10例小样本验证，不能代表大规模临床泛化，
+也不得直接作为临床诊断依据。

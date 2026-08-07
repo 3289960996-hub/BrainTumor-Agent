@@ -1,0 +1,86 @@
+{
+  "summary": {
+    "num_cases": 10,
+    "whole_tumor": 0.8952870314098741,
+    "tumor_core": 0.9186728390868449,
+    "enhancing_tumor": 0.8621389667279686
+  },
+  "cases": [
+    {
+      "case_id": "UPENN-GBM-00002_11",
+      "whole_tumor": 0.9209173969793026,
+      "tumor_core": 0.9615140792309732,
+      "enhancing_tumor": 0.9019572826630473
+    },
+    {
+      "case_id": "UPENN-GBM-00006_11",
+      "whole_tumor": 0.9106971840919383,
+      "tumor_core": 0.9596264413455735,
+      "enhancing_tumor": 0.8435954029987062
+    },
+    {
+      "case_id": "UPENN-GBM-00008_11",
+      "whole_tumor": 0.8145656714584101,
+      "tumor_core": 0.9125946317962835,
+      "enhancing_tumor": 0.8608897742363878
+    },
+    {
+      "case_id": "UPENN-GBM-00009_11",
+      "whole_tumor": 0.9006973743578377,
+      "tumor_core": 0.9355891360008033,
+      "enhancing_tumor": 0.9260109203133655
+    },
+    {
+      "case_id": "UPENN-GBM-00011_11",
+      "whole_tumor": 0.9531587492747334,
+      "tumor_core": 0.9119322741133045,
+      "enhancing_tumor": 0.8934390136503743
+    },
+    {
+      "case_id": "UPENN-GBM-00013_11",
+      "whole_tumor": 0.8559540523292917,
+      "tumor_core": 0.9191847206385405,
+      "enhancing_tumor": 0.8230416372618208
+    },
+    {
+      "case_id": "UPENN-GBM-00014_11",
+      "whole_tumor": 0.9396905235428226,
+      "tumor_core": 0.9336842589187201,
+      "enhancing_tumor": 0.8075059897518406
+    },
+    {
+      "case_id": "UPENN-GBM-00016_11",
+      "whole_tumor": 0.9166001596169194,
+      "tumor_core": 0.9362590313085363,
+      "enhancing_tumor": 0.8986936159723934
+    },
+    {
+      "case_id": "UPENN-GBM-00017_11",
+      "whole_tumor": 0.8297538116295954,
+      "tumor_core": 0.8410901467505241,
+      "enhancing_tumor": 0.8448195030473511
+    },
+    {
+      "case_id": "UPENN-GBM-00018_11",
+      "whole_tumor": 0.9108353908178892,
+      "tumor_core": 0.8752536707651905,
+      "enhancing_tumor": 0.8214365273844
+    }
+  ],
+  "metadata": {
+    "ground_truth_label_space": "brats",
+    "prediction_label_space": "brats",
+    "inference_folds": "0,1,2,3,4",
+    "device": "cuda",
+    "gpu_name": "Tesla T4",
+    "torch_version": "2.11.0+cu128",
+    "nnunet_version": "2.8.1",
+    "output_label_profile": "brats19_preserved",
+    "validation_cohort": "UPENN-GBM-00002_11,UPENN-GBM-00006_11,UPENN-GBM-00008_11,UPENN-GBM-00009_11,UPENN-GBM-00011_11,UPENN-GBM-00013_11,UPENN-GBM-00014_11,UPENN-GBM-00016_11,UPENN-GBM-00017_11,UPENN-GBM-00018_11",
+    "validation_source": "UPENN-GBM expert-reviewed masks (TCIA, CC BY 4.0)",
+    "validation_doi": "10.7937/TCIA.709X-DN49",
+    "validation_caveat": "Independent institutional cohort; 10-case sample, not a full clinical validation.",
+    "validated_at": "2026-08-07T03:03:57.757489+00:00"
+  },
+  "empty_region_policy": "prediction and target both empty => Dice 1.0"
+}

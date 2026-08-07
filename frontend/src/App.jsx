@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   analyzeCase,
+  applyReportEdit,
   askAgent,
   checkHealth,
   downloadNifti,
+  getCase,
   generateReport,
+  proposeReportEdit,
   uploadMRI,
 } from "./api";
 import Icon from "./components/Icon";
@@ -15,6 +18,7 @@ import {
   findTumorSlice,
   parseNiftiBuffer,
   parseNiftiFile,
+  sliceTumorMetrics,
 } from "./nifti";
 
 const MODALITIES = [
@@ -35,7 +39,18 @@ const QUICK_QUESTIONS = [
   "解释当前肿瘤量化指标",
 ];
 
+const REPORT_EDIT_ACTIONS = [
+  "生成简洁的会诊版报告",
+  "只保留病灶位置、体积和水肿信息",
+  "优化为规范的影像科表述",
+];
+
 const EMPTY_LAYERS = { wt: true, tc: true, et: true };
+const ACTIVE_CASE_STORAGE_KEY = "brain-tumor-agent.active-case";
+
+function navigationFromHash() {
+  return window.location.hash === "#assistant" ? "assistant" : "analysis";
+}
 
 function statusText(status) {
   const labels = {
@@ -56,6 +71,14 @@ function metricValue(metrics, key, suffix = "") {
   return `${value}${suffix}`;
 }
 
+function sliceMetricValue(metrics, key, suffix, digits) {
+  const value = metrics?.[key];
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${value.toFixed(digits)}${suffix}`;
+}
+
 function normalizeLocation(location) {
   if (!location) {
     return "—";
@@ -74,21 +97,22 @@ function normalizeLocation(location) {
 }
 
 function App() {
-  const analysisRef = useRef(null);
-  const assistantRef = useRef(null);
   const [caseId, setCaseId] = useState("");
   const [status, setStatus] = useState("idle");
-  const [activeNav, setActiveNav] = useState("analysis");
+  const [activeNav, setActiveNav] = useState(navigationFromHash);
   const [activeTab, setActiveTab] = useState("report");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [volumes, setVolumes] = useState({});
   const [mask, setMask] = useState(null);
   const [maskUrl, setMaskUrl] = useState("");
   const [metrics, setMetrics] = useState(null);
+  const [metricMode, setMetricMode] = useState("overall");
   const [slice, setSlice] = useState(0);
   const [opacity, setOpacity] = useState(0.58);
   const [layers, setLayers] = useState(EMPTY_LAYERS);
   const [report, setReport] = useState("");
+  const [editInstruction, setEditInstruction] = useState("");
+  const [editSuggestion, setEditSuggestion] = useState(null);
   const [messages, setMessages] = useState([]);
   const [citations, setCitations] = useState([]);
   const [question, setQuestion] = useState("");
@@ -99,6 +123,11 @@ function App() {
 
   useEffect(() => {
     refreshApiStatus();
+    restoreActiveCase();
+
+    const syncNavigation = () => setActiveNav(navigationFromHash());
+    window.addEventListener("hashchange", syncNavigation);
+    return () => window.removeEventListener("hashchange", syncNavigation);
   }, []);
 
   const maxSlice = useMemo(() => {
@@ -110,6 +139,10 @@ function App() {
 
   const primaryVolume =
     volumes.t1ce || volumes.flair || volumes.t1 || volumes.t2 || null;
+  const currentSliceMetrics = useMemo(
+    () => sliceTumorMetrics(mask, slice),
+    [mask, slice],
+  );
   const isAnalyzed = status === "analyzed";
   const isBusy = Boolean(busyAction) || status === "uploading" || status === "analyzing";
   const unavailableCapabilities = capabilities
@@ -133,6 +166,61 @@ function App() {
     }
   }
 
+  async function restoreActiveCase() {
+    const requestedCaseId = new URLSearchParams(window.location.search).get("case");
+    const savedCaseId =
+      requestedCaseId || window.localStorage.getItem(ACTIVE_CASE_STORAGE_KEY);
+    if (!savedCaseId) {
+      return;
+    }
+    try {
+      const restored = await getCase(savedCaseId);
+      const modalityEntries = await Promise.all(
+        MODALITIES.map(async ([key]) => {
+          const url = restored.modalities?.[key];
+          if (!url) {
+            throw new Error(`病例缺少${key}模态文件`);
+          }
+          const buffer = await downloadNifti(url);
+          return [key, await parseNiftiBuffer(buffer)];
+        }),
+      );
+      const restoredVolumes = Object.fromEntries(modalityEntries);
+      setCaseId(restored.case_id);
+      window.localStorage.setItem(ACTIVE_CASE_STORAGE_KEY, restored.case_id);
+      setVolumes(restoredVolumes);
+      setMetrics(restored.tumor_metrics || null);
+      setReport(restored.report || "");
+      setEditSuggestion(null);
+      setEditInstruction("");
+      setSlice(Math.floor(restoredVolumes.t1.depth / 2));
+
+      if (restored.mask?.download_url) {
+        setMaskUrl(restored.mask.download_url);
+        const maskBuffer = await downloadNifti(restored.mask.download_url);
+        const restoredMask = await parseNiftiBuffer(maskBuffer);
+        setMask(restoredMask);
+        setSlice(findTumorSlice(restoredMask));
+      } else {
+        setMask(null);
+        setMaskUrl("");
+      }
+
+      setStatus(
+        restored.status === "analyzed" || restored.status === "report_ready"
+          ? "analyzed"
+          : restored.status === "analyzing"
+            ? "uploaded"
+            : restored.status === "analysis_failed"
+              ? "uploaded"
+              : "uploaded",
+      );
+      showFeedback("success", "已恢复上次病例及其分析结果");
+    } catch {
+      window.localStorage.removeItem(ACTIVE_CASE_STORAGE_KEY);
+    }
+  }
+
   function showFeedback(type, message) {
     setFeedback({ type, message });
   }
@@ -149,16 +237,22 @@ function App() {
       const uploaded = await uploadMRI(files, requestedCaseId);
       setVolumes(parsedVolumes);
       setCaseId(uploaded.case_id);
+      window.localStorage.setItem(
+        ACTIVE_CASE_STORAGE_KEY,
+        uploaded.case_id,
+      );
       setSlice(Math.floor(parsedVolumes.t1.depth / 2));
       setMask(null);
       setMaskUrl("");
       setMetrics(null);
       setReport("");
+      setEditInstruction("");
+      setEditSuggestion(null);
       setMessages([]);
       setCitations([]);
       setStatus("uploaded");
       setUploadOpen(false);
-      setActiveNav("analysis");
+      navigate("analysis");
       showFeedback("success", "四模态MRI上传完成，可以开始AI分析。");
       return true;
     } catch (uploadError) {
@@ -192,7 +286,7 @@ function App() {
         maskPreviewError = maskError.message;
       }
       setStatus("analyzed");
-      setActiveNav("analysis");
+      navigate("analysis");
       if (maskPreviewError) {
         showFeedback(
           "warning",
@@ -222,9 +316,48 @@ function App() {
     try {
       const response = await generateReport(caseId);
       setReport(response.report);
+      setEditSuggestion(null);
       showFeedback("success", "影像辅助报告已生成，请由影像科医师审核。");
     } catch (reportError) {
       showFeedback("error", reportError.message || "辅助报告生成失败");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleReportEdit(instruction = "") {
+    const prompt = (instruction || editInstruction).trim();
+    if (!caseId || !report || !prompt) {
+      showFeedback("warning", "请先生成报告，再输入修改指令");
+      return;
+    }
+    setFeedback(null);
+    setBusyAction("report-edit");
+    try {
+      const suggestion = await proposeReportEdit(caseId, prompt);
+      setEditSuggestion(suggestion);
+      setEditInstruction("");
+      showFeedback("success", "已生成报告修改建议，请审核差异后确认");
+    } catch (editError) {
+      showFeedback("error", editError.message || "报告修改建议生成失败");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleApplyReportEdit() {
+    if (!caseId || !editSuggestion) {
+      return;
+    }
+    setFeedback(null);
+    setBusyAction("report-apply");
+    try {
+      const response = await applyReportEdit(caseId, editSuggestion.suggestion_id);
+      setReport(response.report);
+      setEditSuggestion(null);
+      showFeedback("success", `报告修改已保存（版本 ${response.revision_id}）`);
+    } catch (applyError) {
+      showFeedback("error", applyError.message || "报告修改保存失败");
     } finally {
       setBusyAction("");
     }
@@ -261,18 +394,21 @@ function App() {
 
   function navigate(target) {
     setActiveNav(target);
-    const targetRef = target === "assistant" ? assistantRef : analysisRef;
+    const targetHash = target === "assistant" ? "#assistant" : "#workbench";
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash;
+    }
     requestAnimationFrame(() => {
-      targetRef.current?.scrollIntoView({
+      window.scrollTo({
         behavior: "smooth",
-        block: "start",
+        top: 0,
       });
     });
   }
 
   function openAssistantTab(tab) {
     setActiveTab(tab);
-    setActiveNav("assistant");
+    navigate("assistant");
   }
 
   function toggleLayer(name) {
@@ -397,7 +533,7 @@ function App() {
           </div>
         </header>
 
-        <main className="dashboard">
+        <main className={`dashboard ${activeNav}-page`}>
           {feedback && (
             <div
               className={`feedback-banner ${feedback.type}`}
@@ -425,7 +561,8 @@ function App() {
               </div>
             )}
 
-          <section className="analysis-layout" ref={analysisRef}>
+          {activeNav === "analysis" && (
+          <section className="analysis-layout">
             <div className="viewer-area">
               <div className="viewer-grid">
                 {MODALITIES.map(([key, title]) => (
@@ -461,29 +598,89 @@ function App() {
 
             <aside className="result-panel">
               <div className="panel-title">
-                <Icon name="layers" size={18} />
-                <h2>AI 定量指标</h2>
+                <div className="panel-title-label">
+                  <Icon name="layers" size={18} />
+                  <h2>AI 定量指标</h2>
+                </div>
+                <div className="metric-mode" aria-label="定量指标范围">
+                  <button
+                    aria-pressed={metricMode === "overall"}
+                    className={metricMode === "overall" ? "active" : ""}
+                    onClick={() => setMetricMode("overall")}
+                    type="button"
+                  >
+                    总体
+                  </button>
+                  <button
+                    aria-pressed={metricMode === "slice"}
+                    className={metricMode === "slice" ? "active" : ""}
+                    onClick={() => setMetricMode("slice")}
+                    type="button"
+                  >
+                    当前层
+                  </button>
+                </div>
               </div>
               <div className="metric-list">
                 <Metric
-                  color="blue"
-                  label="Whole Tumor"
-                  value={metricValue(metrics, "tumor_volume", " cm³")}
+                  color="wt"
+                  label={metricMode === "slice" ? "Whole Tumor 面积" : "Whole Tumor"}
+                  value={
+                    metricMode === "slice"
+                      ? sliceMetricValue(
+                          currentSliceMetrics,
+                          "wholeTumorArea",
+                          " cm²",
+                          2,
+                        )
+                      : metricValue(metrics, "tumor_volume", " cm³")
+                  }
                 />
                 <Metric
-                  color="coral"
-                  label="Tumor Core"
-                  value={metricValue(metrics, "tumor_core_volume", " cm³")}
+                  color="tc"
+                  label={metricMode === "slice" ? "Tumor Core 面积" : "Tumor Core"}
+                  value={
+                    metricMode === "slice"
+                      ? sliceMetricValue(
+                          currentSliceMetrics,
+                          "tumorCoreArea",
+                          " cm²",
+                          2,
+                        )
+                      : metricValue(metrics, "tumor_core_volume", " cm³")
+                  }
                 />
                 <Metric
-                  color="violet"
-                  label="Enhancing Tumor"
-                  value={metricValue(metrics, "enhancing_volume", " cm³")}
+                  color="et"
+                  label={
+                    metricMode === "slice"
+                      ? "Enhancing Tumor 面积"
+                      : "Enhancing Tumor"
+                  }
+                  value={
+                    metricMode === "slice"
+                      ? sliceMetricValue(
+                          currentSliceMetrics,
+                          "enhancingTumorArea",
+                          " cm²",
+                          2,
+                        )
+                      : metricValue(metrics, "enhancing_volume", " cm³")
+                  }
                 />
                 <Metric
                   color="teal"
-                  label="最大径"
-                  value={metricValue(metrics, "max_diameter", " mm")}
+                  label={metricMode === "slice" ? "层内最大径" : "最大径"}
+                  value={
+                    metricMode === "slice"
+                      ? sliceMetricValue(
+                          currentSliceMetrics,
+                          "maximumDiameter",
+                          " mm",
+                          1,
+                        )
+                      : metricValue(metrics, "max_diameter", " mm")
+                  }
                 />
                 <Metric
                   color="slate"
@@ -590,8 +787,10 @@ function App() {
               </div>
             </aside>
           </section>
+          )}
 
-          <section className="assistant-panel" ref={assistantRef}>
+          {activeNav === "assistant" && (
+          <section className="assistant-panel">
             <div className="assistant-tabs" role="tablist">
               <TabButton
                 active={activeTab === "report"}
@@ -602,7 +801,7 @@ function App() {
               <TabButton
                 active={activeTab === "chat"}
                 icon="chat"
-                label="Agent 问答"
+                label="报告协作Agent"
                 onClick={() => openAssistantTab("chat")}
               />
               <TabButton
@@ -617,11 +816,16 @@ function App() {
               <ReportPanel
                 busy={Boolean(busyAction)}
                 caseId={caseId}
+                editInstruction={editInstruction}
+                editSuggestion={editSuggestion}
                 isAnalyzed={isAnalyzed}
                 metrics={metrics}
+                onApplyEdit={handleApplyReportEdit}
+                onEditInstructionChange={setEditInstruction}
+                onRejectEdit={() => setEditSuggestion(null)}
                 onExport={exportReport}
+                onEdit={handleReportEdit}
                 onGenerate={handleReport}
-                onQuickQuestion={handleAsk}
                 report={report}
               />
             )}
@@ -638,6 +842,7 @@ function App() {
               <SourcesPanel citations={citations} />
             )}
           </section>
+          )}
         </main>
       </div>
 
@@ -700,11 +905,16 @@ function TabButton({ active, icon, label, onClick }) {
 function ReportPanel({
   busy,
   caseId,
+  editInstruction,
+  editSuggestion,
   isAnalyzed,
   metrics,
+  onApplyEdit,
+  onEditInstructionChange,
+  onRejectEdit,
   onExport,
+  onEdit,
   onGenerate,
-  onQuickQuestion,
   report,
 }) {
   return (
@@ -740,17 +950,83 @@ function ReportPanel({
       <aside className="quick-actions">
         <span className="section-kicker">快捷操作</span>
         <div className="question-chips">
-          {QUICK_QUESTIONS.map((item) => (
+          {REPORT_EDIT_ACTIONS.map((item) => (
             <button
               disabled={busy}
               key={item}
-              onClick={() => onQuickQuestion(item)}
+              onClick={() => onEdit(item)}
               type="button"
             >
               {item}
             </button>
           ))}
         </div>
+        <form
+          className="report-edit-composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onEdit();
+          }}
+        >
+          <label htmlFor="report-edit-instruction">医生修改指令</label>
+          <textarea
+            disabled={!report || busy}
+            id="report-edit-instruction"
+            maxLength="2000"
+            onChange={(event) => onEditInstructionChange(event.target.value)}
+            placeholder="例如：改成简洁会诊版，保留定量指标和人工复核提示"
+            rows="3"
+            value={editInstruction}
+          />
+          <button
+            className="secondary-button"
+            disabled={!report || busy || !editInstruction.trim()}
+            type="submit"
+          >
+            {busy ? "正在生成建议…" : "生成修改建议"}
+          </button>
+        </form>
+        {editSuggestion && (
+          <div className="report-edit-suggestion" role="status">
+            <div className="edit-suggestion-heading">
+              <strong>待医生确认的修改建议</strong>
+              <span>核心定量指标由后端锁定</span>
+            </div>
+            <ul>
+              {editSuggestion.change_summary.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+            <div className="edit-diff">
+              <div>
+                <span>当前报告</span>
+                <pre>{editSuggestion.current_report}</pre>
+              </div>
+              <div>
+                <span>修改建议</span>
+                <pre>{editSuggestion.proposed_report}</pre>
+              </div>
+            </div>
+            <div className="report-edit-buttons">
+              <button
+                className="primary-button"
+                disabled={busy}
+                onClick={onApplyEdit}
+                type="button"
+              >
+                确认并保存新版本
+              </button>
+              <button
+                className="secondary-button"
+                disabled={busy}
+                onClick={onRejectEdit}
+                type="button"
+              >
+                保留当前报告
+              </button>
+            </div>
+          </div>
+        )}
         <ul className="pipeline-checks">
           <CheckItem complete={Boolean(caseId)} label="四模态MRI已上传" />
           <CheckItem complete={isAnalyzed} label="nnU-Net分割与量化完成" />

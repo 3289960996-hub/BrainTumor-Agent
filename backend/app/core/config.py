@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     qwen_model: str = "qwen-plus"
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_timeout_seconds: float = Field(default=60.0, gt=0.0)
+    qwen_enable_data_inspection: bool = False
     agent_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     agent_max_tokens: int = Field(default=1000, ge=100)
     report_temperature: float = Field(default=0.2, ge=0.0, le=2.0)

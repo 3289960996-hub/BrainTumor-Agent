@@ -26,6 +26,8 @@ from segmentation.prepare_dataset import (
 )
 from segmentation.train import configure_device, normalize_folds
 
+ANALYSIS_CACHE_VERSION = 2
+
 
 class PreprocessorProtocol(Protocol):
     def prepare(self, paths: CasePaths) -> Path:
@@ -107,9 +109,6 @@ class NNUNetInferenceService:
     ) -> Path:
         brats_output = output_root / "brats_predictions"
         restored_mask = brats_output / f"{case_id}.nii.gz"
-        if restored_mask.is_file():
-            return restored_mask
-
         nnunet_output = output_root / "nnunet_predictions"
         internal_mask = nnunet_output / f"{case_id}.nii.gz"
         if internal_mask.is_file():
@@ -118,6 +117,8 @@ class NNUNetInferenceService:
                 restored_mask,
                 output_label_profile=self.config.output_label_profile,
             )
+        if restored_mask.is_file():
+            return restored_mask
 
         configure_nnunet_environment(self.config.nnunet_root)
         folds = normalize_folds(self.config.folds)
@@ -180,14 +181,20 @@ class MRIAnalysisPipeline:
         with self.repository.case_lock(case_id):
             paths = self.repository.require_case(case_id)
             cached = self.repository.load_features(case_id)
-            if paths.mask.is_file() and cached is not None:
+            status_payload = self.repository.read_status(case_id)
+            if (
+                paths.mask.is_file()
+                and cached is not None
+                and status_payload.get("analysis_cache_version")
+                == ANALYSIS_CACHE_VERSION
+            ):
                 return AnalysisResult(
                     case_id=paths.case_id,
                     mask_path=paths.mask,
                     metrics=cached,
                 )
 
-            status = str(self.repository.read_status(case_id).get("status", ""))
+            status = str(status_payload.get("status", ""))
             if status not in {
                 "uploaded",
                 "analysis_failed",
@@ -233,6 +240,9 @@ class MRIAnalysisPipeline:
                 extra={
                     "mask_filename": mask_path.name,
                     "features_filename": paths.features.name,
+                    "analysis_cache_version": ANALYSIS_CACHE_VERSION,
+                    "label_mapping_revision": 2,
+                    "report_stale": paths.report.is_file(),
                 },
             )
             return AnalysisResult(

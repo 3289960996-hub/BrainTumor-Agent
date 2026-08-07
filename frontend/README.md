@@ -4,7 +4,8 @@ React + Vite医生端演示界面，对接FastAPI默认接口前缀`/api/v1`。
 
 ## 已实现功能
 
-- T1、T1ce、T2、FLAIR四模态NIfTI上传。
+- T1、T1ce、T2、FLAIR四模态NIfTI上传；支持一次选择4个文件后按文件名自动匹配，
+  并要求医生确认对应关系。
 - 浏览器直接解析`.nii`和`.nii.gz`，无需把影像转换为PNG。
 - 四窗口轴位切片显示及共享切片滑块。
 - 加载nnU-Net输出mask，切换WT、TC、ET图层和透明度。
@@ -45,7 +46,7 @@ VITE_API_BASE_URL=https://your-api.example.com/api/v1
 
 ## 操作顺序
 
-1. 点击“上传MRI”，选择四个BraTS模态。
+1. 点击“上传MRI”，一次选择四个BraTS文件自动匹配，或分别手动选择；核对后勾选确认。
 2. 上传完成后点击“开始AI分析”。
 3. 查看四模态切片、mask图层及定量指标。
 4. 在下方生成辅助报告，或向医学影像助手提问。

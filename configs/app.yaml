@@ -34,11 +34,11 @@ segmentation:
 
 rag:
   vector_store: faiss
-  embedding_model: BAAI/bge-m3
+  embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
   chunk_size: 900
   chunk_overlap: 150
   top_k: 5
-  enabled: false
+  enabled: true
 
 agent:
   provider: dashscope

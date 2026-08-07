@@ -3,9 +3,9 @@ import { useEffect, useRef } from "react";
 import { grayscaleSlice, voxelValue } from "../nifti";
 
 const COLORS = {
-  wt: [75, 194, 203],
-  tc: [242, 139, 111],
-  et: [156, 117, 222],
+  wt: [34, 199, 214],
+  tc: [245, 158, 11],
+  et: [168, 85, 247],
 };
 
 function selectedColor(label, layers) {

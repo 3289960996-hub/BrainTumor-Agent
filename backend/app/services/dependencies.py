@@ -11,7 +11,10 @@ from backend.app.services.analysis import (
     NNUNetInferenceService,
 )
 from backend.app.services.chat import MedicalAgentChatService
-from backend.app.services.reporting import MedicalReportService
+from backend.app.services.reporting import (
+    MedicalReportEditingService,
+    MedicalReportService,
+)
 from backend.app.services.storage import CaseRepository
 from backend.app.services.upload import MRIUploadService
 from report.generator import ReportConfig
@@ -77,6 +80,24 @@ def get_report_service() -> MedicalReportService:
             temperature=settings.report_temperature,
             max_tokens=settings.report_max_tokens,
             timeout_seconds=settings.qwen_timeout_seconds,
+            enable_data_inspection=settings.qwen_enable_data_inspection,
+        ),
+    )
+
+
+@lru_cache
+def get_report_editing_service() -> MedicalReportEditingService:
+    settings = get_settings()
+    return MedicalReportEditingService(
+        get_case_repository(),
+        config=ReportConfig(
+            api_key=_api_key(),
+            base_url=settings.qwen_base_url,
+            model=settings.qwen_model,
+            temperature=settings.report_temperature,
+            max_tokens=settings.report_max_tokens,
+            timeout_seconds=settings.qwen_timeout_seconds,
+            enable_data_inspection=settings.qwen_enable_data_inspection,
         ),
     )
 
@@ -94,6 +115,7 @@ def get_chat_service() -> MedicalAgentChatService:
             temperature=settings.agent_temperature,
             max_tokens=settings.agent_max_tokens,
             timeout_seconds=settings.qwen_timeout_seconds,
+            enable_data_inspection=settings.qwen_enable_data_inspection,
         ),
     )
 
@@ -104,5 +126,6 @@ def clear_service_caches() -> None:
     get_upload_service.cache_clear()
     get_analysis_pipeline.cache_clear()
     get_report_service.cache_clear()
+    get_report_editing_service.cache_clear()
     get_chat_service.cache_clear()
     get_case_repository.cache_clear()

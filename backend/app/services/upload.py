@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,13 @@ class MRIUploadService:
         expected = set(MRIModality)
         if set(uploads) != expected:
             raise InvalidUploadError("必须同时上传T1、T1ce、T2和FLAIR四个模态")
+        for modality, upload in uploads.items():
+            inferred = _infer_modality_from_filename(upload.filename)
+            if inferred is not None and inferred is not modality:
+                raise InvalidUploadError(
+                    f"文件{upload.filename}更像{inferred.value}模态，"
+                    f"不能作为{modality.value}上传"
+                )
 
         paths = self.repository.create_case(case_id)
         saved: dict[str, str] = {}
@@ -94,6 +102,27 @@ def _nifti_suffix(filename: str | None) -> str:
     if name.endswith(".nii"):
         return ".nii"
     raise InvalidUploadError("MRI文件仅支持.nii或.nii.gz格式")
+
+
+def _infer_modality_from_filename(filename: str | None) -> MRIModality | None:
+    name = (filename or "").lower()
+    name = re.sub(r"\.nii(?:\.gz)?$", "", name)
+    stem = re.sub(r"[^a-z0-9]+", "_", name)
+
+    def has_token(pattern: str) -> bool:
+        return re.search(rf"(?:^|_){pattern}(?:_|$)", stem) is not None
+
+    if has_token("flair"):
+        return MRIModality.FLAIR
+    if has_token(r"t1(?:ce|c|gd|post)") or re.search(
+        r"(?:^|_)t1_(?:ce|c|gd|post)(?:_|$)", stem
+    ):
+        return MRIModality.T1CE
+    if has_token("t2"):
+        return MRIModality.T2
+    if has_token("t1"):
+        return MRIModality.T1
+    return None
 
 
 def _validate_nifti_header(path: Path) -> None:

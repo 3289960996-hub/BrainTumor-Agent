@@ -1,20 +1,20 @@
 import { useMemo, useState } from "react";
 
 import Icon from "./Icon";
-
-const MODALITIES = [
-  ["t1", "T1"],
-  ["t1ce", "T1ce"],
-  ["t2", "T2"],
-  ["flair", "FLAIR"],
-];
+import {
+  autoMatchModalities,
+  MODALITIES,
+  validateModalityAssignments,
+} from "../modalityFiles";
 
 export default function UploadDialog({ open, busy, onClose, onSubmit }) {
   const [files, setFiles] = useState({});
   const [caseId, setCaseId] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [matchFeedback, setMatchFeedback] = useState(null);
   const complete = useMemo(
-    () => MODALITIES.every(([key]) => files[key]),
-    [files],
+    () => MODALITIES.every(([key]) => files[key]) && confirmed,
+    [confirmed, files],
   );
 
   if (!open) {
@@ -23,6 +23,24 @@ export default function UploadDialog({ open, busy, onClose, onSubmit }) {
 
   function updateFile(modality, file) {
     setFiles((current) => ({ ...current, [modality]: file }));
+    setConfirmed(false);
+    setMatchFeedback(null);
+  }
+
+  function matchSelectedFiles(event) {
+    try {
+      const matched = autoMatchModalities(event.target.files);
+      setFiles(matched);
+      setConfirmed(false);
+      setMatchFeedback({
+        type: "success",
+        message: "已按文件名匹配四个模态，请逐项核对后确认。",
+      });
+    } catch (error) {
+      setMatchFeedback({ type: "error", message: error.message });
+    } finally {
+      event.target.value = "";
+    }
   }
 
   async function submit(event) {
@@ -30,10 +48,19 @@ export default function UploadDialog({ open, busy, onClose, onSubmit }) {
     if (!complete || busy) {
       return;
     }
+    try {
+      validateModalityAssignments(files);
+    } catch (error) {
+      setConfirmed(false);
+      setMatchFeedback({ type: "error", message: error.message });
+      return;
+    }
     const uploaded = await onSubmit(files, caseId);
     if (uploaded) {
       setFiles({});
       setCaseId("");
+      setConfirmed(false);
+      setMatchFeedback(null);
     }
   }
 
@@ -62,6 +89,25 @@ export default function UploadDialog({ open, busy, onClose, onSubmit }) {
         </header>
 
         <form onSubmit={submit}>
+          <label className="auto-match-field">
+            <Icon name="upload" />
+            <span>
+              <strong>自动匹配四模态</strong>
+              <small>一次选择4个文件，按文件名识别T1、T1ce、T2和FLAIR</small>
+            </span>
+            <input
+              accept=".nii,.nii.gz,application/gzip"
+              multiple
+              onChange={matchSelectedFiles}
+              type="file"
+            />
+          </label>
+          {matchFeedback && (
+            <p className={`modality-match-feedback ${matchFeedback.type}`} role="status">
+              {matchFeedback.message}
+            </p>
+          )}
+
           <label className="case-id-field">
             <span>病例编号（可选）</span>
             <input
@@ -88,6 +134,16 @@ export default function UploadDialog({ open, busy, onClose, onSubmit }) {
               </label>
             ))}
           </div>
+
+          <label className="modality-confirmation">
+            <input
+              checked={confirmed}
+              disabled={!MODALITIES.every(([key]) => files[key]) || busy}
+              onChange={(event) => setConfirmed(event.target.checked)}
+              type="checkbox"
+            />
+            <span>我已核对四个MRI模态与文件对应正确</span>
+          </label>
 
           <footer>
             <span className="upload-progress">

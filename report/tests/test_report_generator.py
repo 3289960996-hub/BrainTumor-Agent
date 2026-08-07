@@ -115,6 +115,29 @@ def test_generator_builds_five_section_safe_report() -> None:
     assert result.to_agent_payload()["requires_human_review"] is True
     request = client.completions.requests[0]
     assert request["model"] == "qwen-plus"
+    assert "extra_headers" not in request
+
+
+def test_data_inspection_header_is_explicitly_opt_in() -> None:
+    client = _FakeClient([_safe_response()])
+    generator = QwenReportGenerator(
+        config=ReportConfig(
+            api_key="test-key",
+            enable_data_inspection=True,
+        ),
+        client=client,
+    )
+
+    generator.generate(
+        {
+            "location": "left frontal",
+            "tumor_volume": 35.5,
+            "enhancing_ratio": 0.42,
+            "edema": True,
+        }
+    )
+
+    request = client.completions.requests[0]
     assert "X-DashScope-DataInspection" in request["extra_headers"]
 
 

@@ -93,8 +93,8 @@ def create_bge_embeddings(
         "encode_kwargs": {
             "normalize_embeddings": resolved_config.normalize_embeddings,
             "batch_size": resolved_config.batch_size,
-            "show_progress_bar": False,
         },
+        "show_progress": False,
     }
     if resolved_config.cache_dir is not None:
         factory_kwargs["cache_folder"] = str(resolved_config.cache_dir)

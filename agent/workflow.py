@@ -182,7 +182,9 @@ def build_workflow(*, tools: AgentTools, model: AgentLanguageModel):
                 "retrieved_evidence": [
                     asdict(chunk) for chunk in result.chunks
                 ],
-                "citations": [chunk.citation for chunk in result.chunks],
+                "citations": list(
+                    dict.fromkeys(chunk.citation for chunk in result.chunks)
+                ),
             }
         except Exception as exc:
             return {

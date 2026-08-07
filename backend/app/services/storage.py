@@ -168,6 +168,57 @@ class CaseRepository:
         paths.report.write_text(report.strip() + "\n", encoding="utf-8")
         return paths.report
 
+    def save_report_revision(self, case_id: str, report: str) -> str:
+        """保存旧报告副本并返回可审计的修订编号。"""
+
+        paths = self.require_case(case_id)
+        revision_id = f"rev-{uuid.uuid4().hex[:16]}"
+        revisions = paths.root / "report_revisions"
+        revisions.mkdir(parents=True, exist_ok=True)
+        (revisions / f"{revision_id}.md").write_text(
+            report.strip() + "\n", encoding="utf-8"
+        )
+        return revision_id
+
+    def save_report_proposal(
+        self,
+        case_id: str,
+        suggestion_id: str,
+        payload: Mapping[str, Any],
+    ) -> Path:
+        """持久化待医生确认的报告修改建议。"""
+
+        paths = self.require_case(case_id)
+        proposals = paths.root / "report_edit_proposals"
+        proposals.mkdir(parents=True, exist_ok=True)
+        target = proposals / f"{suggestion_id}.json"
+        target.write_text(
+            json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return target
+
+    def load_report_proposal(
+        self,
+        case_id: str,
+        suggestion_id: str,
+    ) -> dict[str, Any]:
+        """读取待确认建议，并限制路径在当前病例目录内。"""
+
+        paths = self.require_case(case_id)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", suggestion_id):
+            raise InvalidUploadError("报告修改建议编号格式不合法")
+        target = paths.root / "report_edit_proposals" / f"{suggestion_id}.json"
+        if not target.is_file():
+            raise InvalidUploadError("报告修改建议不存在或已失效")
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise InvalidUploadError("报告修改建议无法读取") from exc
+        if not isinstance(payload, dict):
+            raise InvalidUploadError("报告修改建议格式无效")
+        return payload
+
     def remove_uncommitted_case(self, case_id: str) -> None:
         """仅清理刚创建但尚未完成上传的精确病例目录。"""
 

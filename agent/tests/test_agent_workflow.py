@@ -137,6 +137,14 @@ class FakeMedicalRAG:
                     citation="MRI胶质瘤影像表现（2025版），第12页",
                     metadata={"topic": "mri_glioma"},
                 ),
+                RetrievedChunk(
+                    chunk_id="chunk-2",
+                    document_id="doc-1",
+                    text="同一页的相邻文本块不应在证据来源列表中重复显示。",
+                    score=0.89,
+                    citation="MRI胶质瘤影像表现（2025版），第12页",
+                    metadata={"topic": "mri_glioma"},
+                ),
             ),
         )
 

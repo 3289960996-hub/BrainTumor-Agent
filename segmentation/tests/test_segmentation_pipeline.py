@@ -9,6 +9,7 @@ import nibabel as nib
 import numpy as np
 import pytest
 
+import segmentation.prepare_dataset as prepare_dataset_module
 from segmentation.evaluate import dice_score, evaluate_folders, labels_to_regions
 from segmentation.inference import (
     build_predict_command,
@@ -21,6 +22,7 @@ from segmentation.prepare_dataset import (
     convert_brats_to_nnunet_labels,
     convert_nnunet_to_brats_labels,
     prepare_brats_dataset,
+    run_command,
 )
 from segmentation.train import build_train_command, normalize_folds
 
@@ -64,6 +66,35 @@ def test_label_conversion_round_trip() -> None:
     assert convert_nnunet_to_brats_labels(nnunet).tolist() == brats.tolist()
 
 
+def test_run_command_resolves_tool_next_to_virtualenv_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scripts_dir = tmp_path / "Scripts"
+    scripts_dir.mkdir()
+    python_executable = scripts_dir / "python.exe"
+    tool_executable = scripts_dir / "nnUNetv2_predict.exe"
+    python_executable.touch()
+    tool_executable.touch()
+    calls: list[tuple[list[str], bool]] = []
+
+    monkeypatch.setattr(
+        prepare_dataset_module.sys,
+        "executable",
+        str(python_executable),
+    )
+    monkeypatch.setattr(prepare_dataset_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(
+        prepare_dataset_module.subprocess,
+        "run",
+        lambda command, check: calls.append((command, check)),
+    )
+
+    run_command(["nnUNetv2_predict", "--help"])
+
+    assert calls == [([str(tool_executable), "--help"], True)]
+
+
 def test_brats19_five_class_output_conversion() -> None:
     """Dataset002自定义五类输出应还原到标准BraTS标签。"""
 
@@ -71,7 +102,7 @@ def test_brats19_five_class_output_conversion() -> None:
 
     restored = convert_brats19_preserved_to_brats_labels(model_output)
 
-    assert restored.tolist() == [0, 2, 1, 0, 4]
+    assert restored.tolist() == [0, 1, 2, 0, 4]
 
 
 def test_prepare_dataset_generates_channels_labels_and_json(tmp_path: Path) -> None:
@@ -209,7 +240,7 @@ def test_brats19_prediction_folder_restore(tmp_path: Path) -> None:
     )
     restored = np.asarray(nib.load(restored_paths[0]).dataobj)
 
-    assert restored.reshape(-1).tolist() == [0, 2, 1, 0, 4]
+    assert restored.reshape(-1).tolist() == [0, 1, 2, 0, 4]
 
 
 def test_evaluate_outputs_perfect_region_dice(tmp_path: Path) -> None:

@@ -23,6 +23,9 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*.ipynb" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

@@ -74,6 +74,10 @@ curl.exe -X POST "http://localhost:8000/api/v1/upload" `
   -F "flair=@D:\BraTS\case-001_flair.nii.gz"
 ```
 
+后端会根据常见BraTS文件名再次检查明显的槽位错误，例如把`*_t2.nii.gz`作为`t1`
+上传会直接返回400。无法从文件名识别的NIfTI仍可由医生在前端手动指定并确认；系统
+不会声称仅凭NIfTI像素自动识别扫描序列。
+
 ## 分析
 
 ```powershell

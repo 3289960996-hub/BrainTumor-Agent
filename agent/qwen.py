@@ -39,7 +39,7 @@ class QwenAgentConfig:
     temperature: float = 0.1
     max_tokens: int = 1000
     timeout_seconds: float = 60.0
-    enable_data_inspection: bool = True
+    enable_data_inspection: bool = False
 
     @classmethod
     def from_env(cls) -> QwenAgentConfig:
@@ -52,6 +52,11 @@ class QwenAgentConfig:
             temperature=float(os.getenv("BTA_AGENT_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("BTA_AGENT_MAX_TOKENS", "1000")),
             timeout_seconds=float(os.getenv("BTA_QWEN_TIMEOUT_SECONDS", "60")),
+            enable_data_inspection=os.getenv(
+                "BTA_QWEN_ENABLE_DATA_INSPECTION",
+                "false",
+            ).strip().lower()
+            in {"1", "true", "yes", "on"},
         )
 
 

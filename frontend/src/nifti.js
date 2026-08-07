@@ -81,6 +81,11 @@ export async function parseNiftiBuffer(sourceBuffer) {
   const interceptValue = view.getFloat32(116, littleEndian);
   const slope = Number.isFinite(slopeValue) && slopeValue !== 0 ? slopeValue : 1;
   const intercept = Number.isFinite(interceptValue) ? interceptValue : 0;
+  const spacing = {
+    x: positiveSpacing(view.getFloat32(80, littleEndian)),
+    y: positiveSpacing(view.getFloat32(84, littleEndian)),
+    z: positiveSpacing(view.getFloat32(88, littleEndian)),
+  };
   const voxelCount = width * height * depth;
   if (dataOffset + voxelCount * reader.bytes > buffer.byteLength) {
     throw new Error("NIfTI体素数据不完整");
@@ -95,9 +100,14 @@ export async function parseNiftiBuffer(sourceBuffer) {
     dataOffset,
     slope,
     intercept,
+    spacing,
     reader,
     view,
   };
+}
+
+function positiveSpacing(value) {
+  return Number.isFinite(value) && value !== 0 ? Math.abs(value) : 1;
 }
 
 export async function parseNiftiFile(file) {
@@ -188,4 +198,122 @@ export function findTumorSlice(mask) {
     }
   });
   return bestSlice;
+}
+
+function isWholeTumor(label) {
+  return label === 1 || label === 2 || label === 4;
+}
+
+function cross(origin, first, second) {
+  return (
+    (first.x - origin.x) * (second.y - origin.y) -
+    (first.y - origin.y) * (second.x - origin.x)
+  );
+}
+
+function convexHull(points) {
+  if (points.length <= 2) {
+    return points;
+  }
+  const sorted = [...points].sort((first, second) =>
+    first.x === second.x ? first.y - second.y : first.x - second.x,
+  );
+  const lower = [];
+  for (const point of sorted) {
+    while (
+      lower.length >= 2 &&
+      cross(lower.at(-2), lower.at(-1), point) <= 0
+    ) {
+      lower.pop();
+    }
+    lower.push(point);
+  }
+  const upper = [];
+  for (const point of sorted.toReversed()) {
+    while (
+      upper.length >= 2 &&
+      cross(upper.at(-2), upper.at(-1), point) <= 0
+    ) {
+      upper.pop();
+    }
+    upper.push(point);
+  }
+  lower.pop();
+  upper.pop();
+  return [...lower, ...upper];
+}
+
+function maximumDiameter(points) {
+  const hull = convexHull(points);
+  let maximumSquared = 0;
+  for (let first = 0; first < hull.length; first += 1) {
+    for (let second = first + 1; second < hull.length; second += 1) {
+      const deltaX = hull[first].x - hull[second].x;
+      const deltaY = hull[first].y - hull[second].y;
+      maximumSquared = Math.max(
+        maximumSquared,
+        deltaX * deltaX + deltaY * deltaY,
+      );
+    }
+  }
+  return Math.sqrt(maximumSquared);
+}
+
+export function sliceTumorMetrics(mask, sliceIndex) {
+  if (!mask) {
+    return null;
+  }
+  const z = Math.min(mask.depth - 1, Math.max(0, sliceIndex));
+  const labels = new Uint8Array(mask.width * mask.height);
+  const counts = { wholeTumor: 0, tumorCore: 0, enhancingTumor: 0 };
+
+  for (let y = 0; y < mask.height; y += 1) {
+    for (let x = 0; x < mask.width; x += 1) {
+      const label = Math.round(voxelValue(mask, x, y, z));
+      labels[x + mask.width * y] = label;
+      if (isWholeTumor(label)) {
+        counts.wholeTumor += 1;
+      }
+      if (label === 1 || label === 4) {
+        counts.tumorCore += 1;
+      }
+      if (label === 4) {
+        counts.enhancingTumor += 1;
+      }
+    }
+  }
+
+  const boundary = [];
+  for (let y = 0; y < mask.height; y += 1) {
+    for (let x = 0; x < mask.width; x += 1) {
+      const index = x + mask.width * y;
+      if (!isWholeTumor(labels[index])) {
+        continue;
+      }
+      const isBoundary =
+        x === 0 ||
+        y === 0 ||
+        x === mask.width - 1 ||
+        y === mask.height - 1 ||
+        !isWholeTumor(labels[index - 1]) ||
+        !isWholeTumor(labels[index + 1]) ||
+        !isWholeTumor(labels[index - mask.width]) ||
+        !isWholeTumor(labels[index + mask.width]);
+      if (isBoundary) {
+        boundary.push({
+          x: x * mask.spacing.x,
+          y: y * mask.spacing.y,
+        });
+      }
+    }
+  }
+
+  const voxelAreaCm2 = (mask.spacing.x * mask.spacing.y) / 100;
+  return {
+    slice: z,
+    wholeTumorArea: counts.wholeTumor * voxelAreaCm2,
+    tumorCoreArea: counts.tumorCore * voxelAreaCm2,
+    enhancingTumorArea: counts.enhancingTumor * voxelAreaCm2,
+    maximumDiameter: maximumDiameter(boundary),
+  };
 }

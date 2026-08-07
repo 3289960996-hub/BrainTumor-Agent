@@ -18,6 +18,7 @@
 $env:DASHSCOPE_API_KEY = "sk-..."
 $env:BTA_QWEN_MODEL = "qwen-plus"
 $env:BTA_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+$env:BTA_QWEN_ENABLE_DATA_INSPECTION = "false"
 ```
 
 生产环境建议将`BTA_QWEN_BASE_URL`替换为阿里云百炼控制台提供的业务空间专属地址：

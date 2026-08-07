@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -12,18 +15,29 @@ from fastapi.testclient import TestClient
 
 from agent.assistant import AssistantResponse
 from backend.app.main import app
-from backend.app.services.analysis import AnalysisResult, MRIAnalysisPipeline
+from backend.app.services.analysis import (
+    ANALYSIS_CACHE_VERSION,
+    AnalysisResult,
+    MRIAnalysisPipeline,
+    NNUNetInferenceConfig,
+    NNUNetInferenceService,
+)
 from backend.app.services.dependencies import (
     get_analysis_pipeline,
     get_case_repository,
     get_chat_service,
+    get_report_editing_service,
     get_report_service,
     get_upload_service,
 )
 from backend.app.services.errors import CaseNotFoundError
+from backend.app.services.reporting import (
+    MedicalReportEditingService,
+    MedicalReportService,
+)
 from backend.app.services.storage import CasePaths, CaseRepository
 from backend.app.services.upload import MRIUploadService
-from report.generator import GeneratedReport
+from report.generator import EditedReport, GeneratedReport
 from report.template import MRIAnalysisInput
 
 METRICS: dict[str, Any] = {
@@ -111,6 +125,25 @@ def test_upload_rejects_non_nifti_and_removes_partial_case(
     assert not repository.paths("case-invalid").root.exists()
 
 
+def test_upload_rejects_filename_modality_mismatch(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    service = MRIUploadService(repository, max_file_bytes=10 * 1024 * 1024)
+    app.dependency_overrides[get_upload_service] = lambda: service
+    files = _multipart_modalities(tmp_path)
+    files["t1"], files["t2"] = files["t2"], files["t1"]
+
+    response = TestClient(app).post(
+        "/api/v1/upload",
+        data={"case_id": "case-mismatch"},
+        files=files,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_upload"
+    assert "更像t2模态" in response.json()["detail"]["message"]
+    assert not repository.paths("case-mismatch").root.exists()
+
+
 class FakeAnalysisPipeline:
     def __init__(self, mask_path: Path) -> None:
         self.mask_path = mask_path
@@ -140,6 +173,40 @@ def test_analyze_returns_mask_and_tumor_metrics(tmp_path: Path) -> None:
     )
     assert payload["tumor_metrics"]["tumor_volume"] == 35.5
     assert pipeline.calls == ["case-api"]
+
+
+def test_restore_case_returns_modalities_mask_metrics_and_report(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    paths = repository.create_case("case-restore")
+    modalities = {}
+    for modality in ("t1", "t1ce", "t2", "flair"):
+        filename = f"case-restore_{modality}.nii.gz"
+        _nifti_file(paths.raw / filename)
+        modalities[modality] = filename
+    paths.mask.parent.mkdir(parents=True, exist_ok=True)
+    _nifti_file(paths.mask)
+    repository.save_features("case-restore", METRICS)
+    repository.save_report("case-restore", "影像表现提示：需要医师复核。")
+    repository.write_status(
+        "case-restore",
+        "report_ready",
+        extra={"modalities": modalities},
+    )
+    app.dependency_overrides[get_case_repository] = lambda: repository
+
+    response = TestClient(app).get("/api/v1/cases/case-restore")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "report_ready"
+    assert set(payload["modalities"]) == {"t1", "t1ce", "t2", "flair"}
+    assert payload["mask"]["download_url"].endswith("/api/v1/cases/case-restore/mask")
+    assert payload["tumor_metrics"]["tumor_volume"] == METRICS["tumor_volume"]
+    assert "需要医师复核" in payload["report"]
+
+    modality = TestClient(app).get("/api/v1/cases/case-restore/modalities/t1")
+    assert modality.status_code == 200
+    assert modality.headers["content-type"].startswith("application/gzip")
 
 
 class FakePreprocessor:
@@ -185,9 +252,120 @@ def test_analysis_pipeline_runs_preprocess_predict_and_measure(
     assert result.metrics["enhancing_volume"] == 0.001
     assert result.metrics["edema"] is True
     assert repository.read_status("case-pipeline")["status"] == "analyzed"
+    assert (
+        repository.read_status("case-pipeline")["analysis_cache_version"]
+        == ANALYSIS_CACHE_VERSION
+    )
     assert cached.metrics == result.metrics
     assert preprocessor.calls == 1
     assert predictor.calls == 1
+
+
+def test_analysis_pipeline_recomputes_legacy_cached_metrics(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    paths = repository.create_case("case-legacy-cache")
+    repository.write_status("case-legacy-cache", "analyzed")
+    paths.mask.parent.mkdir(parents=True, exist_ok=True)
+    _nifti_file(paths.mask)
+    repository.save_features("case-legacy-cache", METRICS)
+    preprocessor = FakePreprocessor()
+    predictor = FakePredictor()
+    pipeline = MRIAnalysisPipeline(repository, preprocessor, predictor)
+
+    refreshed = pipeline.analyze("case-legacy-cache")
+    cached = pipeline.analyze("case-legacy-cache")
+
+    assert refreshed.metrics != METRICS
+    assert cached.metrics == refreshed.metrics
+    assert preprocessor.calls == 1
+    assert predictor.calls == 1
+
+
+def test_nnunet_service_restores_existing_raw_prediction_with_current_mapping(
+    tmp_path: Path,
+) -> None:
+    case_id = "case-label-refresh"
+    output_root = tmp_path / "inference"
+    internal_mask = output_root / "nnunet_predictions" / f"{case_id}.nii.gz"
+    legacy_mask = output_root / "brats_predictions" / f"{case_id}.nii.gz"
+    internal_mask.parent.mkdir(parents=True)
+    legacy_mask.parent.mkdir(parents=True)
+    _nifti_file(
+        internal_mask,
+        np.asarray([0, 1, 2, 3, 4], dtype=np.uint8).reshape(1, 1, 5),
+    )
+    _nifti_file(legacy_mask, np.zeros((1, 1, 5), dtype=np.uint8))
+    service = NNUNetInferenceService(
+        NNUNetInferenceConfig(
+            nnunet_root=tmp_path / "nnunet",
+            output_label_profile="brats19_preserved",
+        )
+    )
+
+    restored = service.predict(tmp_path / "input", output_root, case_id)
+
+    labels = np.asarray(nib.load(restored).dataobj).reshape(-1)
+    assert labels.tolist() == [0, 1, 2, 0, 4]
+
+
+def test_same_case_concurrent_analysis_runs_inference_once(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    repository.create_case("case-concurrent")
+    repository.write_status("case-concurrent", "uploaded")
+    preprocessor = FakePreprocessor()
+    predictor = FakePredictor()
+    pipeline = MRIAnalysisPipeline(repository, preprocessor, predictor)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(
+            executor.map(lambda _: pipeline.analyze("case-concurrent"), range(24))
+        )
+
+    assert all(result.metrics == results[0].metrics for result in results)
+    assert preprocessor.calls == 1
+    assert predictor.calls == 1
+
+
+def test_nnunet_service_serializes_concurrent_inference(tmp_path: Path) -> None:
+    class TrackingInferenceService(NNUNetInferenceService):
+        def __init__(self) -> None:
+            super().__init__(NNUNetInferenceConfig(nnunet_root=tmp_path))
+            self.active = 0
+            self.max_active = 0
+            self.guard = threading.Lock()
+
+        def _predict_locked(
+            self,
+            input_dir: Path,
+            output_root: Path,
+            case_id: str,
+        ) -> Path:
+            with self.guard:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            try:
+                time.sleep(0.01)
+                return output_root / f"{case_id}.nii.gz"
+            finally:
+                with self.guard:
+                    self.active -= 1
+
+    service = TrackingInferenceService()
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        results = list(
+            executor.map(
+                lambda index: service.predict(
+                    tmp_path / "input",
+                    tmp_path / "output",
+                    f"case-{index}",
+                ),
+                range(36),
+            )
+        )
+
+    assert len(results) == 36
+    assert service.max_active == 1
 
 
 class FakeReportService:
@@ -198,6 +376,40 @@ class FakeReportService:
             request_id="request-1",
             analysis=MRIAnalysisInput.from_mapping(METRICS),
         )
+
+
+def test_regenerated_report_clears_stale_marker(tmp_path: Path) -> None:
+    class FakeReportGenerator:
+        def generate(
+            self,
+            analysis_data: dict[str, Any],
+            case_id: str | None = None,
+        ) -> GeneratedReport:
+            return GeneratedReport(
+                content="影像表现提示：需要医师复核。建议结合临床。",
+                model="fake-qwen",
+                request_id="request-stale",
+                analysis=MRIAnalysisInput.from_mapping(analysis_data),
+            )
+
+    repository = CaseRepository(tmp_path / "data")
+    repository.create_case("case-stale-report")
+    repository.save_features("case-stale-report", METRICS)
+    repository.write_status(
+        "case-stale-report",
+        "analyzed",
+        extra={"report_stale": True},
+    )
+    service = MedicalReportService(
+        repository,
+        generator=FakeReportGenerator(),
+    )
+
+    service.generate("case-stale-report")
+
+    status = repository.read_status("case-stale-report")
+    assert status["status"] == "report_ready"
+    assert status["report_stale"] is False
 
 
 def test_report_returns_assisted_report() -> None:
@@ -213,6 +425,43 @@ def test_report_returns_assisted_report() -> None:
     assert payload["status"] == "report_ready"
     assert "建议结合临床" in payload["report"]
     assert payload["requires_human_review"] is True
+
+
+def test_report_edit_requires_confirmation_and_preserves_revision(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    repository.create_case("case-edit")
+    repository.save_features("case-edit", METRICS)
+    repository.save_report("case-edit", "影像表现提示：原始报告。\n- Whole Tumor体积：35.5 cm3")
+
+    class FakeEditor:
+        def edit(self, current_report: str, instruction: str, analysis: dict) -> EditedReport:
+            return EditedReport(
+                content=current_report.replace("原始报告", "简洁会诊版报告"),
+                change_summary=("压缩报告表述",),
+                model="fake-qwen",
+                request_id="edit-1",
+            )
+
+    service = MedicalReportEditingService(repository, editor=FakeEditor())
+    app.dependency_overrides[get_report_editing_service] = lambda: service
+    response = TestClient(app).post(
+        "/api/v1/report/edit",
+        json={"case_id": "case-edit", "instruction": "改成会诊版"},
+    )
+    assert response.status_code == 200
+    proposal = response.json()
+    assert proposal["status"] == "edit_proposed"
+    assert "简洁会诊版报告" in proposal["proposed_report"]
+    assert repository.paths("case-edit").report.read_text(encoding="utf-8").count("原始报告") == 1
+
+    applied = TestClient(app).post(
+        "/api/v1/report/apply",
+        json={"case_id": "case-edit", "suggestion_id": proposal["suggestion_id"]},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["status"] == "report_updated"
+    assert "简洁会诊版报告" in repository.paths("case-edit").report.read_text(encoding="utf-8")
+    assert list(repository.paths("case-edit").root.glob("report_revisions/*.md"))
 
 
 class FakeChatService:

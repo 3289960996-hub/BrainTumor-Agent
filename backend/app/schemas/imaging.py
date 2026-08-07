@@ -51,6 +51,17 @@ class AnalyzeResponse(StrictModel):
     tumor_metrics: TumorMetrics
 
 
+class CaseRestoreResponse(StrictModel):
+    """病例恢复所需的持久化状态和产物地址。"""
+
+    case_id: str
+    status: str
+    modalities: dict[str, str]
+    mask: MaskArtifact | None = None
+    tumor_metrics: TumorMetrics | None = None
+    report: str | None = None
+
+
 class ReportRequest(StrictModel):
     case_id: str = Field(pattern=CASE_ID_PATTERN)
 
@@ -58,6 +69,43 @@ class ReportRequest(StrictModel):
 class ReportResponse(StrictModel):
     case_id: str
     status: Literal["report_ready"]
+    report: str
+    requires_human_review: bool = True
+
+
+class ReportEditRequest(StrictModel):
+    """Doctor instruction for a report edit proposal."""
+
+    case_id: str = Field(pattern=CASE_ID_PATTERN)
+    instruction: str = Field(min_length=1, max_length=2000)
+
+
+class ReportEditResponse(StrictModel):
+    """A non-destructive report edit proposal awaiting doctor confirmation."""
+
+    case_id: str
+    status: Literal["edit_proposed"]
+    suggestion_id: str
+    current_report: str
+    proposed_report: str
+    change_summary: list[str]
+    protected_metrics: dict[str, float | bool | str]
+    requires_confirmation: bool = True
+
+
+class ReportApplyRequest(StrictModel):
+    """Apply a previously reviewed report proposal."""
+
+    case_id: str = Field(pattern=CASE_ID_PATTERN)
+    suggestion_id: str = Field(min_length=8, max_length=64)
+
+
+class ReportApplyResponse(StrictModel):
+    """Result of saving a confirmed report revision."""
+
+    case_id: str
+    status: Literal["report_updated"]
+    revision_id: str
     report: str
     requires_human_review: bool = True
 

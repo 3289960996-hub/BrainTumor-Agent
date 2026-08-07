@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -166,9 +167,10 @@ def convert_brats19_preserved_to_brats_labels(
 ) -> NDArray[np.uint8]:
     """还原Dataset002_BRATS19自定义五类输出。
 
-    该模型的dataset.json定义为：
-    0=background，1=edema，2=nonenhancing，3=empty，4=enhancing。
-    输出转为标准BraTS标签0/1/2/4，其中未使用的empty类3按背景处理。
+    虽然模型包的dataset.json将标签1、2分别命名为edema和nonenhancing，
+    但与原始输入严格匹配的BraTS2021真值逐体素复核表明，checkpoint实际
+    保留标准BraTS数值语义：1=nonenhancing，2=edema，4=enhancing。
+    因此仅将未使用的empty类3归为背景，不能交换标签1和2。
     """
 
     labels = np.rint(np.asarray(segmentation)).astype(np.int16)
@@ -179,10 +181,8 @@ def convert_brats19_preserved_to_brats_labels(
             f"Dataset002_BRATS19预测包含未知标签：{sorted(unexpected)}"
         )
 
-    converted = np.zeros(labels.shape, dtype=np.uint8)
-    converted[labels == 1] = 2
-    converted[labels == 2] = 1
-    converted[labels == 4] = 4
+    converted = labels.astype(np.uint8, copy=True)
+    converted[labels == 3] = 0
     return converted
 
 
@@ -482,11 +482,23 @@ def run_command(command: Sequence[str], dry_run: bool = False) -> None:
     print(f"$ {format_command(command)}")
     if dry_run:
         return
-    if shutil.which(command[0]) is None:
+    executable = shutil.which(command[0])
+    if executable is None:
+        scripts_dir = Path(sys.executable).resolve().parent
+        suffixes = (".exe", ".cmd", ".bat") if os.name == "nt" else ("",)
+        executable = next(
+            (
+                str(candidate)
+                for suffix in suffixes
+                if (candidate := scripts_dir / f"{command[0]}{suffix}").is_file()
+            ),
+            None,
+        )
+    if executable is None:
         raise SegmentationSetupError(
             f"找不到命令{command[0]}，请先安装nnunetv2并激活正确的Python环境"
         )
-    subprocess.run(list(command), check=True)
+    subprocess.run([executable, *command[1:]], check=True)
 
 
 def build_plan_and_preprocess_command(

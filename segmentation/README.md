@@ -140,4 +140,7 @@ BraTS训练根目录应包含病例子目录，每个病例包含T1、T1ce、T2�
 
 `--dataset-id 2 --plans nnUNetPlans --output-label-profile brats19_preserved`
 
+该模型包`dataset.json`对标签1、2的类别名称与checkpoint实际数值语义不一致；
+`brats19_preserved`依据匹配BraTS真值的逐体素验证保留标签1、2，仅将空类别3转为背景。
+
 完整模型身份、标签映射、推理命令和限制见`docs/BRATS19_MODEL.md`。

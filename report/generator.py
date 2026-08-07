@@ -60,7 +60,7 @@ class ReportConfig:
     max_tokens: int = 800
     timeout_seconds: float = 60.0
     max_retries: int = 1
-    enable_data_inspection: bool = True
+    enable_data_inspection: bool = False
 
     @classmethod
     def from_env(cls) -> ReportConfig:
@@ -73,6 +73,11 @@ class ReportConfig:
             temperature=float(os.getenv("BTA_REPORT_TEMPERATURE", "0.2")),
             max_tokens=int(os.getenv("BTA_REPORT_MAX_TOKENS", "800")),
             timeout_seconds=float(os.getenv("BTA_QWEN_TIMEOUT_SECONDS", "60")),
+            enable_data_inspection=os.getenv(
+                "BTA_QWEN_ENABLE_DATA_INSPECTION",
+                "false",
+            ).strip().lower()
+            in {"1", "true", "yes", "on"},
         )
 
 
@@ -95,6 +100,16 @@ class GeneratedReport:
             "analysis": self.analysis.to_prompt_payload(),
             "requires_human_review": True,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class EditedReport:
+    """医生确认前的报告修改建议。"""
+
+    content: str
+    change_summary: tuple[str, ...]
+    model: str
+    request_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +188,68 @@ class QwenReportGenerator:
         raise ReportGenerationError(
             f"Qwen-plus输出在修复后仍未通过报告安全校验：{last_error}"
         ) from last_error
+
+    def edit(
+        self,
+        current_report: str,
+        instruction: str,
+        analysis: MRIAnalysisInput | Mapping[str, Any],
+    ) -> EditedReport:
+        """根据医生指令生成非破坏性的报告修改建议。"""
+
+        if not current_report.strip():
+            raise ReportGenerationError("当前病例尚未生成报告")
+        if not instruction.strip():
+            raise ReportGenerationError("报告修改指令不能为空")
+        normalized = (
+            analysis
+            if isinstance(analysis, MRIAnalysisInput)
+            else MRIAnalysisInput.from_mapping(analysis)
+        )
+        payload = json.dumps(
+            normalized.to_prompt_payload(), ensure_ascii=False, indent=2, sort_keys=True
+        )
+        request = {
+            "model": self.config.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是医学影像辅助报告编辑器。只能根据当前报告和给定MRI定量JSON修改文字。"
+                        "不得新增诊断、病理分级、治疗方案或输入中没有的影像事实。"
+                        "WT、TC、ET、最大径和水肿等数值必须保持不变。"
+                        "只输出JSON：{\"edited_report\":\"...\",\"change_summary\":[\"...\"]}。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"医生修改指令：{instruction.strip()}\n"
+                        f"<analysis_json>\n{payload}\n</analysis_json>\n"
+                        f"<current_report>\n{current_report.strip()}\n</current_report>"
+                    ),
+                },
+            ],
+            "temperature": min(self.config.temperature, 0.2),
+            "max_tokens": max(self.config.max_tokens, 1200),
+        }
+        try:
+            response = self.client.chat.completions.create(**request)
+            content = _extract_content(response)
+            edited, summary = _parse_edit_response(content)
+            _validate_numeric_invariants(current_report, edited, normalized)
+            edited = _ensure_protected_metrics(edited, normalized)
+            _validate_edited_report(edited)
+        except ReportGenerationError:
+            raise
+        except Exception as exc:
+            raise ReportGenerationError(f"报告修改建议生成失败：{exc}") from exc
+        return EditedReport(
+            content=edited,
+            change_summary=summary,
+            model=self.config.model,
+            request_id=_extract_request_id(response),
+        )
 
     def _request_narrative(
         self,
@@ -266,6 +343,99 @@ def _parse_narrative(content: str) -> _Narrative:
         imaging_summary=summary.strip(),
         attention_items=tuple(item.strip() for item in items),
     )
+
+
+def _parse_edit_response(content: str) -> tuple[str, tuple[str, ...]]:
+    """解析报告编辑器的严格JSON输出。"""
+
+    stripped = content.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            stripped = "\n".join(lines[1:-1]).strip()
+            if stripped.startswith("json"):
+                stripped = stripped[4:].lstrip()
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise ReportGenerationError("报告修改建议不是合法JSON") from exc
+    edited = payload.get("edited_report") if isinstance(payload, dict) else None
+    summary = payload.get("change_summary") if isinstance(payload, dict) else None
+    if not isinstance(edited, str) or not edited.strip():
+        raise ReportGenerationError("报告修改建议缺少edited_report")
+    if not isinstance(summary, list) or not summary or not all(
+        isinstance(item, str) and item.strip() for item in summary
+    ):
+        raise ReportGenerationError("报告修改建议缺少change_summary")
+    return edited.strip(), tuple(item.strip() for item in summary[:8])
+
+
+def _ensure_protected_metrics(
+    report: str,
+    analysis: MRIAnalysisInput,
+) -> str:
+    """确保修改后报告仍带有后端计算的不可变定量指标。"""
+
+    protected: list[tuple[str, float | None, str]] = [
+        ("Whole Tumor volume", analysis.tumor_volume, "cm3"),
+        ("Tumor Core volume", analysis.tumor_core_volume, "cm3"),
+        ("Enhancing Tumor volume", analysis.enhancing_volume, "cm3"),
+        ("Maximum diameter", analysis.max_diameter, "mm"),
+        ("Edema volume", analysis.edema_volume, "cm3"),
+    ]
+    missing = [
+        f"- {label}: {_format_metric_number(value)} {unit}"
+        for label, value, unit in protected
+        if value is not None and _format_metric_number(value) not in report
+    ]
+    if not missing:
+        return report
+    return (
+        f"{report.rstrip()}\n\n"
+        "## AI quantitative metrics (source of truth)\n"
+        + "\n".join(missing)
+        + "\n"
+    )
+
+
+def _validate_edited_report(report: str) -> None:
+    if len(report) > 12000:
+        raise ReportGenerationError("修改后的报告过长")
+    text = report.lower()
+    if any(term in text for term in ("treatment plan", "prescribe", "pathologic diagnosis")):
+        raise ReportGenerationError("修改后的报告包含超出辅助范围的内容")
+
+
+def _validate_numeric_invariants(
+    current_report: str,
+    edited_report: str,
+    analysis: MRIAnalysisInput,
+) -> None:
+    """拒绝医生未授权的数字改写，避免Qwen修改核心定量结果。"""
+
+    number_pattern = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
+    original_numbers = set(number_pattern.findall(current_report))
+    protected_numbers = {
+        _format_metric_number(value)
+        for value in (
+            analysis.tumor_volume,
+            analysis.tumor_core_volume,
+            analysis.enhancing_volume,
+            analysis.max_diameter,
+            analysis.edema_volume,
+        )
+        if value is not None
+    }
+    allowed = original_numbers | protected_numbers
+    added = set(number_pattern.findall(edited_report)) - allowed
+    if added:
+        raise ReportGenerationError(
+            "修改建议尝试新增或改写定量数字：" + ", ".join(sorted(added))
+        )
+
+
+def _format_metric_number(value: float) -> str:
+    return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
 def validate_narrative(narrative: _Narrative) -> tuple[str, ...]:

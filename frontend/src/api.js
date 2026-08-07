@@ -61,11 +61,36 @@ export async function analyzeCase(caseId) {
   return parseResponse(response);
 }
 
+export async function getCase(caseId) {
+  const response = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}`, {
+    headers: { Accept: "application/json" },
+  });
+  return parseResponse(response);
+}
+
 export async function generateReport(caseId) {
   const response = await fetch(`${API_BASE}/report`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ case_id: caseId }),
+  });
+  return parseResponse(response);
+}
+
+export async function proposeReportEdit(caseId, instruction) {
+  const response = await fetch(`${API_BASE}/report/edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ case_id: caseId, instruction: instruction.trim() }),
+  });
+  return parseResponse(response);
+}
+
+export async function applyReportEdit(caseId, suggestionId) {
+  const response = await fetch(`${API_BASE}/report/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ case_id: caseId, suggestion_id: suggestionId }),
   });
   return parseResponse(response);
 }

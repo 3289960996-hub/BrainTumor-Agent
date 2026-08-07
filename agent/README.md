@@ -45,6 +45,7 @@
 $env:DASHSCOPE_API_KEY = "your-api-key"
 $env:BTA_QWEN_MODEL = "qwen-plus"
 $env:BTA_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+$env:BTA_QWEN_ENABLE_DATA_INSPECTION = "false"
 $env:BTA_FAISS_INDEX_PATH = "runtime\knowledge\faiss"
 ```
 
