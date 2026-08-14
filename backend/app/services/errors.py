@@ -44,6 +44,24 @@ class PipelineExecutionError(BackendServiceError):
         super().__init__(message, code="analysis_failed", status_code=500)
 
 
+class AnalysisTaskNotFoundError(BackendServiceError):
+    def __init__(self, task_id: str) -> None:
+        super().__init__(
+            f"分析任务不存在：{task_id}",
+            code="analysis_task_not_found",
+            status_code=404,
+        )
+
+
+class TaskQueueUnavailableError(BackendServiceError):
+    def __init__(self) -> None:
+        super().__init__(
+            "分析任务队列暂不可用，请确认Redis和Celery配置",
+            code="task_queue_unavailable",
+            status_code=503,
+        )
+
+
 class ExternalServiceError(BackendServiceError):
     def __init__(self, message: str) -> None:
         super().__init__(message, code="external_service_failed", status_code=502)

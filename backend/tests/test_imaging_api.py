@@ -23,7 +23,7 @@ from backend.app.services.analysis import (
     NNUNetInferenceService,
 )
 from backend.app.services.dependencies import (
-    get_analysis_pipeline,
+    get_analysis_task_repository,
     get_case_repository,
     get_chat_service,
     get_report_editing_service,
@@ -35,7 +35,11 @@ from backend.app.services.reporting import (
     MedicalReportEditingService,
     MedicalReportService,
 )
-from backend.app.services.storage import CasePaths, CaseRepository
+from backend.app.services.storage import (
+    AnalysisTaskRepository,
+    CasePaths,
+    CaseRepository,
+)
 from backend.app.services.upload import MRIUploadService
 from report.generator import EditedReport, GeneratedReport
 from report.template import MRIAnalysisInput
@@ -154,25 +158,75 @@ class FakeAnalysisPipeline:
         return AnalysisResult(case_id, self.mask_path, METRICS)
 
 
-def test_analyze_returns_mask_and_tumor_metrics(tmp_path: Path) -> None:
-    mask = _nifti_file(tmp_path / "case-api.nii.gz")
-    pipeline = FakeAnalysisPipeline(mask)
-    app.dependency_overrides[get_analysis_pipeline] = lambda: pipeline
+def test_analyze_queues_persistent_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    repository.create_case("case-api")
+    repository.write_status("case-api", "uploaded")
+    tasks = AnalysisTaskRepository(tmp_path / "data")
+    dispatched: list[tuple[list[str], dict[str, Any]]] = []
+    monkeypatch.setattr(
+        "backend.app.api.routes.imaging.run_analysis.apply_async",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)),
+    )
+    app.dependency_overrides[get_case_repository] = lambda: repository
+    app.dependency_overrides[get_analysis_task_repository] = lambda: tasks
 
     response = TestClient(app).post(
         "/api/v1/analyze",
         json={"case_id": "case-api"},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     payload = response.json()
-    assert payload["mask"]["filename"] == "case-api.nii.gz"
-    assert payload["mask"]["label_space"] == "brats"
-    assert payload["mask"]["download_url"].endswith(
-        "/api/v1/cases/case-api/mask"
+    assert payload["task_id"].startswith("task-")
+    assert payload["status"] == "queued"
+    assert dispatched == [((), {"args": [payload["task_id"], "case-api"]})]
+    assert tasks.get(payload["task_id"])["case_id"] == "case-api"
+
+    duplicate = TestClient(app).post(
+        "/api/v1/analyze",
+        json={"case_id": "case-api"},
     )
-    assert payload["tumor_metrics"]["tumor_volume"] == 35.5
-    assert pipeline.calls == ["case-api"]
+    assert duplicate.json()["task_id"] == payload["task_id"]
+    assert len(dispatched) == 1
+
+
+def test_analysis_task_status_and_cancel_are_persistent(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    repository.create_case("case-task")
+    tasks = AnalysisTaskRepository(tmp_path / "data")
+    task, _ = tasks.create("case-task")
+    app.dependency_overrides[get_case_repository] = lambda: repository
+    app.dependency_overrides[get_analysis_task_repository] = lambda: tasks
+
+    status_response = TestClient(app).get(
+        f"/api/v1/analysis-tasks/{task['task_id']}"
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["progress"] == 0
+
+    cancelled = TestClient(app).post(
+        f"/api/v1/analysis-tasks/{task['task_id']}/cancel"
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancel_requested"
+    assert AnalysisTaskRepository(tmp_path / "data").get(task["task_id"])[
+        "status"
+    ] == "cancel_requested"
+
+    completed = tasks.update(
+        task["task_id"],
+        status="succeeded",
+        stage="completed",
+        progress=100,
+        message="MRI分析已完成",
+        mask_filename="case-task.nii.gz",
+    )
+    completed_response = TestClient(app).get(
+        f"/api/v1/analysis-tasks/{completed['task_id']}"
+    )
+    assert completed_response.status_code == 200
+    assert completed_response.json()["mask_filename"] == "case-task.nii.gz"
 
 
 def test_restore_case_returns_modalities_mask_metrics_and_report(tmp_path: Path) -> None:
@@ -193,6 +247,9 @@ def test_restore_case_returns_modalities_mask_metrics_and_report(tmp_path: Path)
         extra={"modalities": modalities},
     )
     app.dependency_overrides[get_case_repository] = lambda: repository
+    app.dependency_overrides[get_analysis_task_repository] = lambda: AnalysisTaskRepository(
+        tmp_path / "data"
+    )
 
     response = TestClient(app).get("/api/v1/cases/case-restore")
 
@@ -515,11 +572,14 @@ def test_mask_download_uses_repository_artifact(tmp_path: Path) -> None:
 
 
 def test_service_error_is_returned_as_stable_json() -> None:
-    class MissingPipeline:
-        def analyze(self, case_id: str) -> AnalysisResult:
+    class MissingRepository:
+        def require_case(self, case_id: str) -> None:
             raise CaseNotFoundError(case_id)
 
-    app.dependency_overrides[get_analysis_pipeline] = lambda: MissingPipeline()
+    app.dependency_overrides[get_case_repository] = lambda: MissingRepository()
+    app.dependency_overrides[get_analysis_task_repository] = lambda: AnalysisTaskRepository(
+        Path("unused-test-data")
+    )
 
     response = TestClient(app).post(
         "/api/v1/analyze",

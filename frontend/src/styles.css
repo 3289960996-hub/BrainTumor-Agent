@@ -1470,6 +1470,42 @@ output {
   }
 }
 
+.analysis-progress {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+  padding: 10px 0;
+}
+
+.analysis-progress > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.82rem;
+}
+
+.analysis-progress > div strong {
+  min-width: 0;
+  font-weight: 600;
+}
+
+.analysis-progress > div span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-progress progress {
+  width: 100%;
+  height: 7px;
+  accent-color: var(--accent);
+}
+
+.analysis-progress .secondary-button {
+  width: 100%;
+}
+
 @media (max-width: 620px) {
   .application {
     display: block;

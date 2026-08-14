@@ -61,6 +61,22 @@ export async function analyzeCase(caseId) {
   return parseResponse(response);
 }
 
+export async function getAnalysisTask(taskId) {
+  const response = await fetch(
+    `${API_BASE}/analysis-tasks/${encodeURIComponent(taskId)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  return parseResponse(response);
+}
+
+export async function cancelAnalysisTask(taskId) {
+  const response = await fetch(
+    `${API_BASE}/analysis-tasks/${encodeURIComponent(taskId)}/cancel`,
+    { method: "POST", headers: { Accept: "application/json" } },
+  );
+  return parseResponse(response);
+}
+
 export async function getCase(caseId) {
   const response = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}`, {
     headers: { Accept: "application/json" },

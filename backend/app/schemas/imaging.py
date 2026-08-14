@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,11 +45,40 @@ class MaskArtifact(StrictModel):
     label_space: Literal["brats"] = "brats"
 
 
+AnalysisTaskStatus = Literal[
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancel_requested",
+    "cancelled",
+]
+
+
 class AnalyzeResponse(StrictModel):
     case_id: str
-    status: Literal["analyzed"]
-    mask: MaskArtifact
-    tumor_metrics: TumorMetrics
+    task_id: str
+    status: AnalysisTaskStatus
+    stage: str
+    progress: int = Field(ge=0, le=100)
+
+
+class AnalysisTaskResponse(StrictModel):
+    task_id: str
+    case_id: str
+    status: AnalysisTaskStatus
+    stage: str
+    progress: int = Field(ge=0, le=100)
+    message: str
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    attempt: int = Field(default=0, ge=0)
+    error_code: str | None = None
+    error_message: str | None = None
+    mask_filename: str | None = None
+    result_url: str | None = None
 
 
 class CaseRestoreResponse(StrictModel):
@@ -60,6 +90,7 @@ class CaseRestoreResponse(StrictModel):
     mask: MaskArtifact | None = None
     tumor_metrics: TumorMetrics | None = None
     report: str | None = None
+    analysis_task: AnalysisTaskResponse | None = None
 
 
 class ReportRequest(StrictModel):
