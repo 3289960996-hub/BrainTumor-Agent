@@ -4,10 +4,12 @@ import {
   analyzeCase,
   applyReportEdit,
   askAgent,
+  cancelAnalysisTask,
   checkHealth,
   downloadNifti,
   getCase,
   generateReport,
+  getAnalysisTask,
   proposeReportEdit,
   uploadMRI,
 } from "./api";
@@ -120,6 +122,7 @@ function App() {
   const [apiStatus, setApiStatus] = useState("checking");
   const [capabilities, setCapabilities] = useState(null);
   const [feedback, setFeedback] = useState(null);
+  const [analysisTask, setAnalysisTask] = useState(null);
 
   useEffect(() => {
     refreshApiStatus();
@@ -129,6 +132,39 @@ function App() {
     window.addEventListener("hashchange", syncNavigation);
     return () => window.removeEventListener("hashchange", syncNavigation);
   }, []);
+
+  useEffect(() => {
+    if (!analysisTask?.task_id || !["queued", "running", "cancel_requested"].includes(analysisTask.status)) {
+      return undefined;
+    }
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const task = await getAnalysisTask(analysisTask.task_id);
+        if (disposed) return;
+        setAnalysisTask(task);
+        if (task.status === "succeeded") {
+          await loadCompletedAnalysis(task.case_id);
+        } else if (task.status === "failed") {
+          setStatus("uploaded");
+          showFeedback("error", task.error_message || "MRI分析失败");
+        } else if (task.status === "cancelled") {
+          setStatus("uploaded");
+          showFeedback("warning", "MRI分析任务已取消。");
+        }
+      } catch (pollError) {
+        if (!disposed) {
+          showFeedback("error", pollError.message || "无法查询分析任务状态");
+        }
+      }
+    };
+    const timer = window.setInterval(poll, 2000);
+    poll();
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [analysisTask?.task_id, analysisTask?.status]);
 
   const maxSlice = useMemo(() => {
     const depths = Object.values(volumes)
@@ -191,6 +227,7 @@ function App() {
       setVolumes(restoredVolumes);
       setMetrics(restored.tumor_metrics || null);
       setReport(restored.report || "");
+      setAnalysisTask(restored.analysis_task || null);
       setEditSuggestion(null);
       setEditInstruction("");
       setSlice(Math.floor(restoredVolumes.t1.depth / 2));
@@ -206,11 +243,14 @@ function App() {
         setMaskUrl("");
       }
 
+      const taskActive = ["queued", "running", "cancel_requested"].includes(
+        restored.analysis_task?.status,
+      );
       setStatus(
         restored.status === "analyzed" || restored.status === "report_ready"
           ? "analyzed"
-          : restored.status === "analyzing"
-            ? "uploaded"
+          : taskActive || restored.status === "analyzing"
+            ? "analyzing"
             : restored.status === "analysis_failed"
               ? "uploaded"
               : "uploaded",
@@ -250,6 +290,7 @@ function App() {
       setEditSuggestion(null);
       setMessages([]);
       setCitations([]);
+      setAnalysisTask(null);
       setStatus("uploaded");
       setUploadOpen(false);
       navigate("analysis");
@@ -271,35 +312,42 @@ function App() {
     }
     setFeedback(null);
     setStatus("analyzing");
-    setBusyAction("analyze");
     try {
-      const result = await analyzeCase(caseId);
-      let maskPreviewError = "";
-      setMetrics(result.tumor_metrics);
-      setMaskUrl(result.mask.download_url);
-      try {
-        const maskBuffer = await downloadNifti(result.mask.download_url);
-        const parsedMask = await parseNiftiBuffer(maskBuffer);
-        setMask(parsedMask);
-        setSlice(findTumorSlice(parsedMask));
-      } catch (maskError) {
-        maskPreviewError = maskError.message;
-      }
-      setStatus("analyzed");
-      navigate("analysis");
-      if (maskPreviewError) {
-        showFeedback(
-          "warning",
-          `指标分析完成，但mask预览加载失败：${maskPreviewError}`,
-        );
-      } else {
-        showFeedback("success", "AI分割与肿瘤量化分析已完成。");
-      }
+      const task = await analyzeCase(caseId);
+      setAnalysisTask(task);
+      showFeedback("success", "分析任务已提交，可以离开页面或稍后恢复。")
     } catch (analysisError) {
       setStatus("uploaded");
       showFeedback("error", analysisError.message || "MRI分析失败");
-    } finally {
-      setBusyAction("");
+    }
+  }
+
+  async function loadCompletedAnalysis(completedCaseId) {
+    const restored = await getCase(completedCaseId);
+    setMetrics(restored.tumor_metrics || null);
+    if (restored.mask?.download_url) {
+      setMaskUrl(restored.mask.download_url);
+      try {
+        const maskBuffer = await downloadNifti(restored.mask.download_url);
+        const parsedMask = await parseNiftiBuffer(maskBuffer);
+        setMask(parsedMask);
+        setSlice(findTumorSlice(parsedMask));
+        showFeedback("success", "AI分割与肿瘤量化分析已完成。");
+      } catch (maskError) {
+        showFeedback("warning", `指标分析完成，但mask预览加载失败：${maskError.message}`);
+      }
+    }
+    setStatus("analyzed");
+  }
+
+  async function handleCancelAnalysis() {
+    if (!analysisTask?.task_id) return;
+    try {
+      const task = await cancelAnalysisTask(analysisTask.task_id);
+      setAnalysisTask(task);
+      showFeedback("warning", task.message);
+    } catch (cancelError) {
+      showFeedback("error", cancelError.message || "无法取消分析任务");
     }
   }
 
@@ -741,6 +789,23 @@ function App() {
               </div>
 
               <div className="primary-actions">
+                {status === "analyzing" && analysisTask && (
+                  <div className="analysis-progress" role="status">
+                    <div>
+                      <strong>{analysisTask.message}</strong>
+                      <span>{analysisTask.progress}%</span>
+                    </div>
+                    <progress max="100" value={analysisTask.progress} />
+                    <button
+                      className="secondary-button"
+                      disabled={analysisTask.status === "cancel_requested"}
+                      onClick={handleCancelAnalysis}
+                      type="button"
+                    >
+                      {analysisTask.status === "cancel_requested" ? "正在取消" : "取消任务"}
+                    </button>
+                  </div>
+                )}
                 {(status === "idle" || status === "uploading") && (
                   <button
                     className="primary-button"
@@ -755,7 +820,7 @@ function App() {
                 {(status === "uploaded" || status === "analyzing") && (
                   <button
                     className="primary-button"
-                    disabled={isBusy}
+                    disabled={status === "analyzing" || isBusy}
                     onClick={handleAnalyze}
                     type="button"
                   >

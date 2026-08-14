@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -27,6 +28,10 @@ from segmentation.prepare_dataset import (
 from segmentation.train import configure_device, normalize_folds
 
 ANALYSIS_CACHE_VERSION = 2
+
+
+class AnalysisCancellationRequested(Exception):
+    """Raised by a task progress hook at a safe pipeline stage boundary."""
 
 
 class PreprocessorProtocol(Protocol):
@@ -137,6 +142,11 @@ class NNUNetInferenceService:
             raise SegmentationSetupError(
                 f"推理输入中未找到病例{case_id}：{case_ids}"
             )
+        preprocessing_processes = self.config.preprocessing_processes
+        export_processes = self.config.export_processes
+        if self.config.device == "cpu":
+            preprocessing_processes = 1
+            export_processes = 1
         command = build_predict_command(
             input_dir=standardized_input,
             output_dir=nnunet_output,
@@ -148,8 +158,8 @@ class NNUNetInferenceService:
             device=self.config.device,
             checkpoint=self.config.checkpoint,
             step_size=self.config.step_size,
-            preprocessing_processes=self.config.preprocessing_processes,
-            export_processes=self.config.export_processes,
+            preprocessing_processes=preprocessing_processes,
+            export_processes=export_processes,
             disable_tta=self.config.disable_tta,
         )
         run_command(command)
@@ -177,7 +187,12 @@ class MRIAnalysisPipeline:
         self.preprocessor = preprocessor
         self.predictor = predictor
 
-    def analyze(self, case_id: str) -> AnalysisResult:
+    def analyze(
+        self,
+        case_id: str,
+        progress: Callable[[str, int, str], None] | None = None,
+    ) -> AnalysisResult:
+        report_progress = progress or (lambda _stage, _percent, _message: None)
         with self.repository.case_lock(case_id):
             paths = self.repository.require_case(case_id)
             cached = self.repository.load_features(case_id)
@@ -207,17 +222,21 @@ class MRIAnalysisPipeline:
 
             self.repository.write_status(case_id, "analyzing")
             try:
+                report_progress("preprocessing", 10, "正在校验并预处理四模态MRI")
                 processed_dir = self.preprocessor.prepare(paths)
+                report_progress("inference", 30, "正在执行nnU-Net肿瘤分割")
                 mask_path = self.predictor.predict(
                     input_dir=processed_dir,
                     output_root=paths.inference_root,
                     case_id=paths.case_id,
                 )
+                report_progress("measurement", 85, "正在计算WT、TC和ET定量指标")
                 measurement: TumorMeasurement = measure_tumor(
                     mask_path,
                     label_space="brats",
                 )
                 metrics = measurement.to_dict()
+                report_progress("saving", 95, "正在保存分析结果")
                 self.repository.save_features(case_id, metrics)
             except (
                 OSError,
@@ -230,9 +249,18 @@ class MRIAnalysisPipeline:
                     "analysis_failed",
                     extra={"failure_type": type(exc).__name__},
                 )
-                raise PipelineExecutionError(
-                    "MRI分析执行失败，请检查四模态数据、nnU-Net模型和GPU配置"
-                ) from exc
+                if isinstance(exc, subprocess.CalledProcessError) and exc.returncode in {
+                    1,
+                    3221225477,
+                    -1073741819,
+                }:
+                    message = (
+                        "nnU-Net推理失败：系统可用内存不足。已启用CPU低内存模式，"
+                        "请关闭占用内存较大的程序后重试"
+                    )
+                else:
+                    message = "MRI分析执行失败，请检查四模态数据、nnU-Net模型和设备配置"
+                raise PipelineExecutionError(message) from exc
 
             self.repository.write_status(
                 case_id,

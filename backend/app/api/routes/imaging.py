@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import FileResponse
 
 from backend.app.schemas.imaging import (
+    AnalysisTaskResponse,
     AnalyzeRequest,
     AnalyzeResponse,
     CaseRestoreResponse,
@@ -23,22 +24,23 @@ from backend.app.schemas.imaging import (
     TumorMetrics,
     UploadResponse,
 )
-from backend.app.services.analysis import MRIAnalysisPipeline
 from backend.app.services.chat import MedicalAgentChatService
 from backend.app.services.dependencies import (
-    get_analysis_pipeline,
+    get_analysis_task_repository,
     get_case_repository,
     get_chat_service,
     get_report_editing_service,
     get_report_service,
     get_upload_service,
 )
+from backend.app.services.errors import TaskQueueUnavailableError
 from backend.app.services.reporting import (
     MedicalReportEditingService,
     MedicalReportService,
 )
-from backend.app.services.storage import CaseRepository
+from backend.app.services.storage import AnalysisTaskRepository, CaseRepository
 from backend.app.services.upload import MRIUploadService
+from backend.app.tasks.analysis import run_analysis
 from data_process.constants import MRIModality
 
 router = APIRouter()
@@ -82,26 +84,91 @@ async def upload_mri(
 @router.post(
     "/analyze",
     response_model=AnalyzeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="执行MRI预处理、nnU-Net推理和指标计算",
 )
 def analyze_mri(
     payload: AnalyzeRequest,
-    request: Request,
-    pipeline: Annotated[MRIAnalysisPipeline, Depends(get_analysis_pipeline)],
+    repository: Annotated[CaseRepository, Depends(get_case_repository)],
+    tasks: Annotated[
+        AnalysisTaskRepository,
+        Depends(get_analysis_task_repository),
+    ],
 ) -> AnalyzeResponse:
-    result = pipeline.analyze(payload.case_id)
-    download_url = str(
-        request.url_for("download_mask", case_id=result.case_id)
-    )
+    repository.require_case(payload.case_id)
+    task, created = tasks.create(payload.case_id)
+    if created:
+        try:
+            run_analysis.apply_async(args=[task["task_id"], payload.case_id])
+        except Exception as exc:
+            tasks.update(
+                task["task_id"],
+                status="failed",
+                stage="dispatch_failed",
+                message="任务无法投递到分析队列",
+                error_code="task_queue_unavailable",
+                error_message="Redis或Celery不可用",
+            )
+            raise TaskQueueUnavailableError() from exc
     return AnalyzeResponse(
-        case_id=result.case_id,
-        status="analyzed",
-        mask=MaskArtifact(
-            filename=result.mask_path.name,
-            download_url=download_url,
-        ),
-        tumor_metrics=TumorMetrics.model_validate(result.metrics),
+        case_id=payload.case_id,
+        task_id=task["task_id"],
+        status=task["status"],
+        stage=task["stage"],
+        progress=task["progress"],
     )
+
+
+def _task_response(
+    task: dict,
+    request: Request,
+) -> AnalysisTaskResponse:
+    payload = dict(task)
+    payload["result_url"] = (
+        str(request.url_for("restore_case", case_id=task["case_id"]))
+        if task["status"] == "succeeded"
+        else None
+    )
+    return AnalysisTaskResponse.model_validate(payload)
+
+
+@router.get(
+    "/analysis-tasks/{task_id}",
+    response_model=AnalysisTaskResponse,
+    summary="查询MRI分析任务状态和阶段进度",
+)
+def get_analysis_task(
+    task_id: str,
+    request: Request,
+    tasks: Annotated[
+        AnalysisTaskRepository,
+        Depends(get_analysis_task_repository),
+    ],
+) -> AnalysisTaskResponse:
+    return _task_response(tasks.get(task_id), request)
+
+
+@router.post(
+    "/analysis-tasks/{task_id}/cancel",
+    response_model=AnalysisTaskResponse,
+    summary="请求取消MRI分析任务",
+)
+def cancel_analysis_task(
+    task_id: str,
+    request: Request,
+    tasks: Annotated[
+        AnalysisTaskRepository,
+        Depends(get_analysis_task_repository),
+    ],
+) -> AnalysisTaskResponse:
+    task = tasks.get(task_id)
+    if task["status"] in {"queued", "running"}:
+        task = tasks.update(
+            task_id,
+            status="cancel_requested",
+            message="已请求取消；正在运行的推理将在当前阶段结束后停止",
+        )
+    return _task_response(task, request)
 
 
 @router.post(
@@ -131,6 +198,10 @@ def restore_case(
     case_id: str,
     request: Request,
     repository: Annotated[CaseRepository, Depends(get_case_repository)],
+    tasks: Annotated[
+        AnalysisTaskRepository,
+        Depends(get_analysis_task_repository),
+    ],
 ) -> CaseRestoreResponse:
     paths = repository.require_case(case_id)
     status = repository.read_status(case_id)
@@ -163,6 +234,7 @@ def restore_case(
         if paths.report.is_file()
         else None
     )
+    task = tasks.latest_for_case(paths.case_id)
     return CaseRestoreResponse(
         case_id=paths.case_id,
         status=str(status.get("status", "uploaded")),
@@ -170,6 +242,7 @@ def restore_case(
         mask=mask,
         tumor_metrics=tumor_metrics,
         report=report,
+        analysis_task=_task_response(task, request) if task else None,
     )
 
 

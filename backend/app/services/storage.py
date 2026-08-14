@@ -16,6 +16,7 @@ from typing import Any
 
 from backend.app.schemas.imaging import CASE_ID_PATTERN
 from backend.app.services.errors import (
+    AnalysisTaskNotFoundError,
     CaseConflictError,
     CaseNotFoundError,
     InvalidUploadError,
@@ -235,3 +236,109 @@ class CaseRepository:
             lock = self._case_locks.setdefault(normalized, threading.Lock())
         with lock:
             yield
+
+
+class AnalysisTaskRepository:
+    """Atomic JSON task records that survive API, worker, and browser restarts."""
+
+    ACTIVE_STATUSES = {"queued", "running", "cancel_requested"}
+
+    def __init__(self, data_root: str | Path) -> None:
+        self.root = Path(data_root).expanduser().resolve() / "analysis_tasks"
+        self._lock = threading.Lock()
+
+    def _path(self, task_id: str) -> Path:
+        if not re.fullmatch(r"task-[a-f0-9]{32}", task_id):
+            raise InvalidUploadError("分析任务编号格式不合法")
+        target = (self.root / f"{task_id}.json").resolve()
+        if target.parent != self.root:
+            raise InvalidUploadError("分析任务路径不合法")
+        return target
+
+    def create(self, case_id: str) -> tuple[dict[str, Any], bool]:
+        now = datetime.now(UTC).isoformat()
+        payload: dict[str, Any] = {
+            "task_id": f"task-{uuid.uuid4().hex}",
+            "case_id": case_id,
+            "status": "queued",
+            "stage": "queued",
+            "progress": 0,
+            "message": "分析任务已进入队列",
+            "created_at": now,
+            "updated_at": now,
+            "started_at": None,
+            "finished_at": None,
+            "attempt": 0,
+            "error_code": None,
+            "error_message": None,
+        }
+        with self._lock:
+            active = self.find_active_for_case(case_id, locked=True)
+            if active is not None:
+                return active, False
+            self._write(payload)
+        return payload, True
+
+    def get(self, task_id: str) -> dict[str, Any]:
+        target = self._path(task_id)
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AnalysisTaskNotFoundError(task_id) from exc
+        if not isinstance(payload, dict):
+            raise AnalysisTaskNotFoundError(task_id)
+        return payload
+
+    def update(self, task_id: str, **changes: Any) -> dict[str, Any]:
+        with self._lock:
+            payload = self.get(task_id)
+            payload.update(changes)
+            payload["updated_at"] = datetime.now(UTC).isoformat()
+            self._write(payload)
+        return payload
+
+    def latest_for_case(self, case_id: str) -> dict[str, Any] | None:
+        matches = [
+            payload
+            for payload in self._all()
+            if payload.get("case_id") == case_id
+        ]
+        return max(matches, key=lambda item: str(item.get("created_at", ""))) if matches else None
+
+    def find_active_for_case(
+        self,
+        case_id: str,
+        *,
+        locked: bool = False,
+    ) -> dict[str, Any] | None:
+        def find() -> dict[str, Any] | None:
+            latest = self.latest_for_case(case_id)
+            if latest and latest.get("status") in self.ACTIVE_STATUSES:
+                return latest
+            return None
+
+        if locked:
+            return find()
+        with self._lock:
+            return find()
+
+    def _all(self) -> list[dict[str, Any]]:
+        payloads: list[dict[str, Any]] = []
+        for target in self.root.glob("task-*.json"):
+            try:
+                payload = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                payloads.append(payload)
+        return payloads
+
+    def _write(self, payload: Mapping[str, Any]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        target = self._path(str(payload["task_id"]))
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)

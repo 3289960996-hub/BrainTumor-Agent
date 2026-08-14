@@ -7,6 +7,8 @@ import {
   checkHealth,
   downloadNifti,
   generateReport,
+  getAnalysisTask,
+  cancelAnalysisTask,
 } from "./api.js";
 
 function jsonResponse(payload, status = 200) {
@@ -30,6 +32,8 @@ test("前端API方法调用FastAPI对应路由", async (context) => {
 
   await checkHealth();
   await analyzeCase("case-001");
+  await getAnalysisTask("task-001");
+  await cancelAnalysisTask("task-001");
   await generateReport("case-001");
   await askAgent("总结该MRI分析结果", "case-001");
 
@@ -38,6 +42,8 @@ test("前端API方法调用FastAPI对应路由", async (context) => {
     [
       "/api/v1/health",
       "/api/v1/analyze",
+      "/api/v1/analysis-tasks/task-001",
+      "/api/v1/analysis-tasks/task-001/cancel",
       "/api/v1/report",
       "/api/v1/chat",
     ],
@@ -45,10 +51,11 @@ test("前端API方法调用FastAPI对应路由", async (context) => {
   assert.deepEqual(JSON.parse(calls[1].options.body), {
     case_id: "case-001",
   });
-  assert.deepEqual(JSON.parse(calls[2].options.body), {
+  assert.equal(calls[3].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[4].options.body), {
     case_id: "case-001",
   });
-  assert.deepEqual(JSON.parse(calls[3].options.body), {
+  assert.deepEqual(JSON.parse(calls[5].options.body), {
     question: "总结该MRI分析结果",
     case_id: "case-001",
   });

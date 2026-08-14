@@ -5,7 +5,7 @@
 当前版本已实现BraTS 2021四模态数据处理与阅片、nnU-Net V2训练/推理/评估、
 分割定量分析、Qwen-plus辅助报告与医生确认式编辑、多语言Embedding + FAISS医学
 知识库，以及由LangGraph编排的MRI Assistant Agent。FastAPI与React已接通上传、
-分析、病例恢复、报告、问答和证据引用的完整Demo流程。
+异步分析、任务恢复、进度/取消、病例恢复、报告、问答和证据引用的完整流程。
 
 > 本项目当前仅用于科研和教学，不作为独立临床诊断依据。
 
@@ -61,6 +61,21 @@
 
 不要将真实的`DASHSCOPE_API_KEY`或患者信息提交到版本库。
 
+## 一键启动（推荐）
+
+首次使用需安装并启动Docker Desktop。此后在项目根目录运行：
+
+1. 启动全部服务：`.\scripts\start_all.ps1`
+2. 停止全部服务：`.\scripts\stop_all.ps1`
+
+Windows日常使用无需输入命令：打开项目根目录的`启停/`文件夹，双击`一键启动.cmd`
+或`一键停止.cmd`即可。`scripts/`中的PowerShell文件是内部实现，不需要逐个运行。
+
+启动脚本会自动启动Redis容器、FastAPI、单并发Celery Worker和前端，等待健康检查
+通过后打开浏览器。日志与进程状态保存在系统临时目录的`BrainTumor-Agent/`中，重复
+运行不会重复启动服务。如果系统
+已经安装`redis-server`，脚本也可以直接使用它，无需Docker。
+
 ## 启动后端
 
 在项目根目录运行：
@@ -71,6 +86,11 @@ PowerShell中建议显式使用项目虚拟环境，避免误调用系统Python�
 
 也可以直接运行`.\scripts\start_backend.ps1`。
 
+MRI分析使用Redis和单并发Celery Worker。启动Redis后另开终端运行
+`.\scripts\start_worker.ps1`。API提交分析后立即返回`task_id`，任务状态持久化在
+数据目录的`analysis_tasks/`下，刷新页面可恢复进度。取消请求在安全阶段边界生效；
+正在执行的nnU-Net子进程不会被强制终止。
+
 健康检查地址：
 
 - `http://localhost:8000/api/v1/health`
@@ -80,10 +100,13 @@ PowerShell中建议显式使用项目虚拟环境，避免误调用系统Python�
 
 - `POST /api/v1/upload`
 - `POST /api/v1/analyze`
+- `GET /api/v1/analysis-tasks/{task_id}`
+- `POST /api/v1/analysis-tasks/{task_id}/cancel`
 - `POST /api/v1/report`
 - `POST /api/v1/chat`
 
-分析响应包含BraTS标签mask下载地址与完整肿瘤量化指标。接口输入、配置和调用示例见
+分析提交响应包含任务编号；成功后病例恢复接口包含BraTS标签mask下载地址与完整肿瘤
+量化指标。接口输入、配置和调用示例见
 `backend/README.md`。
 
 ## 启动前端
@@ -204,6 +227,6 @@ CC BY 4.0授权的EANO成人弥漫性胶质瘤指南（2021），使用CPU轻量
 
 ## 后续里程碑
 
-1. 将同步GPU分析迁移到任务队列并增加进度查询与取消机制。
+1. 增加强制中断推理、任务优先级和运维监控。
 2. 扩充获授权指南并增加模型、数据和知识库版本审计。
 3. 增加权限控制、脱敏、审计日志和人工审核闭环。

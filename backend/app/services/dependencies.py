@@ -15,7 +15,7 @@ from backend.app.services.reporting import (
     MedicalReportEditingService,
     MedicalReportService,
 )
-from backend.app.services.storage import CaseRepository
+from backend.app.services.storage import AnalysisTaskRepository, CaseRepository
 from backend.app.services.upload import MRIUploadService
 from report.generator import ReportConfig
 
@@ -29,6 +29,12 @@ def _api_key() -> str:
 def get_case_repository() -> CaseRepository:
     settings = get_settings()
     return CaseRepository(settings.data_root)
+
+
+@lru_cache
+def get_analysis_task_repository() -> AnalysisTaskRepository:
+    settings = get_settings()
+    return AnalysisTaskRepository(settings.data_root)
 
 
 @lru_cache
@@ -128,4 +134,5 @@ def clear_service_caches() -> None:
     get_report_service.cache_clear()
     get_report_editing_service.cache_clear()
     get_chat_service.cache_clear()
+    get_analysis_task_repository.cache_clear()
     get_case_repository.cache_clear()
