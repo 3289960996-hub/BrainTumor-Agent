@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -91,6 +91,115 @@ class CaseRestoreResponse(StrictModel):
     tumor_metrics: TumorMetrics | None = None
     report: str | None = None
     analysis_task: AnalysisTaskResponse | None = None
+
+
+class CaseSummary(StrictModel):
+    case_id: str
+    status: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    has_metrics: bool
+    has_report: bool
+
+
+class CaseListResponse(StrictModel):
+    cases: list[CaseSummary]
+
+
+class ComparisonCreateRequest(StrictModel):
+    patient_group_id: str = Field(pattern=CASE_ID_PATTERN)
+    baseline_case_id: str = Field(pattern=CASE_ID_PATTERN)
+    followup_case_id: str = Field(pattern=CASE_ID_PATTERN)
+    baseline_study_date: date
+    followup_study_date: date
+
+
+ComparisonTaskStatus = Literal[
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancel_requested",
+    "cancelled",
+]
+
+
+class ComparisonTaskResponse(StrictModel):
+    task_id: str
+    comparison_id: str
+    status: ComparisonTaskStatus
+    stage: str
+    progress: int = Field(ge=0, le=100)
+    message: str
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    attempt: int = Field(default=0, ge=0)
+    error_code: str | None = None
+    error_message: str | None = None
+    result_url: str | None = None
+
+
+class ComparisonMetricChange(StrictModel):
+    key: str
+    label: str
+    unit: str
+    baseline: float
+    followup: float
+    absolute_change: float
+    percent_change: float | None
+    percentage_point_change: float | None
+    direction: Literal["increased", "decreased", "unchanged"]
+
+
+class RegistrationQuality(StrictModel):
+    passed: bool
+    correlation_before: float
+    correlation_after: float
+    foreground_dice: float
+    rotation_degrees: list[float]
+    translation_mm: list[float]
+    warnings: list[str]
+
+
+class SpatialRegionChange(StrictModel):
+    resolved_voxels: int = Field(ge=0)
+    persistent_voxels: int = Field(ge=0)
+    new_voxels: int = Field(ge=0)
+    resolved_volume_cm3: float = Field(ge=0)
+    persistent_volume_cm3: float = Field(ge=0)
+    new_volume_cm3: float = Field(ge=0)
+
+
+class SpatialComparison(StrictModel):
+    status: Literal["quality_passed", "quality_failed", "unavailable"]
+    method: str
+    unavailable_reason: str | None = None
+    quality: RegistrationQuality | None = None
+    changes: dict[str, SpatialRegionChange]
+    artifacts: dict[str, str]
+    baseline_t1ce_url: str | None = None
+
+
+class ComparisonResponse(StrictModel):
+    comparison_id: str
+    status: Literal["comparison_ready"] = "comparison_ready"
+    comparison_version: int
+    patient_group_id: str
+    baseline_case_id: str
+    followup_case_id: str
+    baseline_study_date: date
+    followup_study_date: date
+    interval_days: int = Field(gt=0)
+    metrics: list[ComparisonMetricChange]
+    baseline_location: str
+    followup_location: str
+    location_consistent: bool
+    spatial_comparison_available: bool
+    spatial_comparison: SpatialComparison | None = None
+    created_at: datetime
+    requires_human_review: bool = True
 
 
 class ReportRequest(StrictModel):

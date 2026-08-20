@@ -7,6 +7,12 @@
 - `POST /api/v1/analyze`
 - `POST /api/v1/report`
 - `POST /api/v1/chat`
+- `GET /api/v1/cases?analyzed_only=true`
+- `POST /api/v1/comparisons`
+- `GET /api/v1/comparisons/{comparison_id}`
+- `POST /api/v1/comparison-tasks`
+- `GET /api/v1/comparison-tasks/{task_id}`
+- `POST /api/v1/comparison-tasks/{task_id}/cancel`
 
 此外提供`GET /api/v1/cases/{case_id}/mask`下载BraTS标签空间的NIfTI mask。
 
@@ -27,6 +33,10 @@
 
 /chat
   └─ 注入当前病例指标 → LangGraph Agent → MRI/RAG/报告工具
+
+/comparison-tasks
+  └─ Celery异步任务 → T1ce刚性配准 → Mask最近邻重采样
+     └─ WT/TC/ET新增、持续、消退Mask → 配准质控 → 结果持久化
 ```
 
 病例产物保存在`BTA_DATA_ROOT/cases/{case_id}`。服务端默认生成去标识化case ID；
@@ -86,9 +96,9 @@ curl.exe -X POST "http://localhost:8000/api/v1/analyze" `
   -d "{\"case_id\":\"case-001\"}"
 ```
 
-响应包含mask下载地址和完整肿瘤量化指标。当前接口等待GPU分析完成后返回；单次推理
-时间较长。生产部署建议将`MRIAnalysisPipeline`放入Celery/GPU任务队列，并用数据库
-锁或分布式锁保证同一病例不会并发推理。
+接口返回Celery任务编号，前端通过任务接口轮询阶段和百分比；任务状态持久化，支持
+取消、失败重试和浏览器刷新后恢复。分析完成后通过病例恢复接口读取mask下载地址和
+完整肿瘤量化指标。同一病例的活跃任务会被去重，避免重复推理。
 
 ## 报告
 

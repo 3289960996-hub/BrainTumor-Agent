@@ -19,7 +19,6 @@ from rag.embedding import (
     EmbeddingSetupError,
     create_bge_embeddings,
 )
-from rag.loader import ChunkingConfig, KnowledgeLoadError, MedicalPDFLoader
 
 INDEX_MANIFEST_FILE = "index_manifest.json"
 FAISS_INDEX_FILE = "index.faiss"
@@ -309,6 +308,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    from rag.loader import ChunkingConfig, KnowledgeLoadError, MedicalPDFLoader
+
     """加载PDF、生成BGE向量并保存FAISS索引。"""
 
     args = build_parser().parse_args(argv)

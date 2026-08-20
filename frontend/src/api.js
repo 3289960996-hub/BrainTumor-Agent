@@ -84,6 +84,56 @@ export async function getCase(caseId) {
   return parseResponse(response);
 }
 
+export async function listCases(analyzedOnly = false) {
+  const query = analyzedOnly ? "?analyzed_only=true" : "";
+  const response = await fetch(`${API_BASE}/cases${query}`, {
+    headers: { Accept: "application/json" },
+  });
+  return parseResponse(response);
+}
+
+export async function createComparison(payload) {
+  const response = await fetch(`${API_BASE}/comparisons`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseResponse(response);
+}
+
+export async function getComparison(comparisonId) {
+  const response = await fetch(
+    `${API_BASE}/comparisons/${encodeURIComponent(comparisonId)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  return parseResponse(response);
+}
+
+export async function startComparisonTask(payload) {
+  const response = await fetch(`${API_BASE}/comparison-tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseResponse(response);
+}
+
+export async function getComparisonTask(taskId) {
+  const response = await fetch(
+    `${API_BASE}/comparison-tasks/${encodeURIComponent(taskId)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  return parseResponse(response);
+}
+
+export async function cancelComparisonTask(taskId) {
+  const response = await fetch(
+    `${API_BASE}/comparison-tasks/${encodeURIComponent(taskId)}/cancel`,
+    { method: "POST", headers: { Accept: "application/json" } },
+  );
+  return parseResponse(response);
+}
+
 export async function generateReport(caseId) {
   const response = await fetch(`${API_BASE}/report`, {
     method: "POST",

@@ -18,7 +18,7 @@
 1. 使用Nibabel读取float32体素数组。
 2. 使用SimpleITK独立读取并核对几何信息。
 3. 按T1、T1ce、T2、FLAIR顺序堆叠为`(4, X, Y, Z)`。
-4. 使用MONAI `NormalizeIntensity`在非零区域逐通道执行Z-score。
+4. 使用NumPy在非零区域逐通道执行低内存Z-score。
 5. 保存为nnU-Net兼容通道文件及`metadata.json`。
 
 该模块不会重采样或自动修复几何不一致的影像。几何不一致通常代表输入或配准错误，默认直接终止，避免静默改变医学空间。

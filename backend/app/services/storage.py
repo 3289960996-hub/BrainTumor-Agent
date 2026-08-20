@@ -220,6 +220,44 @@ class CaseRepository:
             raise InvalidUploadError("报告修改建议格式无效")
         return payload
 
+    def list_cases(self, *, analyzed_only: bool = False) -> list[dict[str, Any]]:
+        """Return de-identified case summaries without reading MRI payloads."""
+
+        summaries: list[dict[str, Any]] = []
+        if not self.cases_root.is_dir():
+            return summaries
+        for root in self.cases_root.iterdir():
+            metadata = root / "case.json"
+            if not root.is_dir() or not metadata.is_file():
+                continue
+            try:
+                payload = json.loads(metadata.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            case_id = payload.get("case_id")
+            if not isinstance(case_id, str) or not CASE_ID_REGEX.fullmatch(case_id):
+                continue
+            has_metrics = (root / "features.json").is_file()
+            if analyzed_only and not has_metrics:
+                continue
+            summaries.append(
+                {
+                    "case_id": case_id,
+                    "status": str(payload.get("status", "uploaded")),
+                    "created_at": payload.get("created_at"),
+                    "updated_at": payload.get("updated_at"),
+                    "has_metrics": has_metrics,
+                    "has_report": (root / "report.md").is_file(),
+                }
+            )
+        return sorted(
+            summaries,
+            key=lambda item: str(item.get("updated_at") or ""),
+            reverse=True,
+        )
+
     def remove_uncommitted_case(self, case_id: str) -> None:
         """仅清理刚创建但尚未完成上传的精确病例目录。"""
 

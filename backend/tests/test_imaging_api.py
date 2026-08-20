@@ -21,6 +21,7 @@ from backend.app.services.analysis import (
     MRIAnalysisPipeline,
     NNUNetInferenceConfig,
     NNUNetInferenceService,
+    _parse_nnunet_progress_line,
 )
 from backend.app.services.dependencies import (
     get_analysis_task_repository,
@@ -163,10 +164,14 @@ def test_analyze_queues_persistent_task(tmp_path: Path, monkeypatch: pytest.Monk
     repository.create_case("case-api")
     repository.write_status("case-api", "uploaded")
     tasks = AnalysisTaskRepository(tmp_path / "data")
-    dispatched: list[tuple[list[str], dict[str, Any]]] = []
+    dispatched: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(
-        "backend.app.api.routes.imaging.run_analysis.apply_async",
+        "backend.app.api.routes.imaging.celery_app.send_task",
         lambda *args, **kwargs: dispatched.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        "backend.app.api.routes.imaging._analysis_worker_available",
+        lambda: True,
     )
     app.dependency_overrides[get_case_repository] = lambda: repository
     app.dependency_overrides[get_analysis_task_repository] = lambda: tasks
@@ -180,7 +185,15 @@ def test_analyze_queues_persistent_task(tmp_path: Path, monkeypatch: pytest.Monk
     payload = response.json()
     assert payload["task_id"].startswith("task-")
     assert payload["status"] == "queued"
-    assert dispatched == [((), {"args": [payload["task_id"], "case-api"]})]
+    assert dispatched == [
+        (
+            ("analysis.run",),
+            {
+                "args": [payload["task_id"], "case-api"],
+                "task_id": payload["task_id"],
+            },
+        )
+    ]
     assert tasks.get(payload["task_id"])["case_id"] == "case-api"
 
     duplicate = TestClient(app).post(
@@ -194,6 +207,7 @@ def test_analyze_queues_persistent_task(tmp_path: Path, monkeypatch: pytest.Monk
 def test_analysis_task_status_and_cancel_are_persistent(tmp_path: Path) -> None:
     repository = CaseRepository(tmp_path / "data")
     repository.create_case("case-task")
+    repository.write_status("case-task", "analyzing")
     tasks = AnalysisTaskRepository(tmp_path / "data")
     task, _ = tasks.create("case-task")
     app.dependency_overrides[get_case_repository] = lambda: repository
@@ -209,10 +223,11 @@ def test_analysis_task_status_and_cancel_are_persistent(tmp_path: Path) -> None:
         f"/api/v1/analysis-tasks/{task['task_id']}/cancel"
     )
     assert cancelled.status_code == 200
-    assert cancelled.json()["status"] == "cancel_requested"
+    assert cancelled.json()["status"] == "cancelled"
     assert AnalysisTaskRepository(tmp_path / "data").get(task["task_id"])[
         "status"
-    ] == "cancel_requested"
+    ] == "cancelled"
+    assert repository.read_status("case-task")["status"] == "uploaded"
 
     completed = tasks.update(
         task["task_id"],
@@ -280,7 +295,13 @@ class FakePredictor:
     def __init__(self) -> None:
         self.calls = 0
 
-    def predict(self, input_dir: Path, output_root: Path, case_id: str) -> Path:
+    def predict(
+        self,
+        input_dir: Path,
+        output_root: Path,
+        case_id: str,
+        progress=None,
+    ) -> Path:
         self.calls += 1
         labels = np.zeros((5, 5, 5), dtype=np.uint8)
         labels[1:4, 1:4, 1:4] = 2
@@ -396,6 +417,7 @@ def test_nnunet_service_serializes_concurrent_inference(tmp_path: Path) -> None:
             input_dir: Path,
             output_root: Path,
             case_id: str,
+            progress=None,
         ) -> Path:
             with self.guard:
                 self.active += 1
@@ -423,6 +445,31 @@ def test_nnunet_service_serializes_concurrent_inference(tmp_path: Path) -> None:
 
     assert len(results) == 36
     assert service.max_active == 1
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (
+            " 12%|█▎        | 1/8 [00:06<00:44,  6.29s/it]",
+            (36, "nnU-Net分割中：1/8（12%）"),
+        ),
+        (
+            "100%|██████████| 8/8 [00:50<00:00,  6.30s/it]",
+            (82, "nnU-Net分割中：8/8（100%）"),
+        ),
+        (
+            "Collecting results: 100%|██████████| 1/1 [00:07<00:00]",
+            (84, "正在汇总分割结果：1/1"),
+        ),
+        ("loading model", None),
+    ],
+)
+def test_parse_nnunet_progress_line(
+    line: str,
+    expected: tuple[int, str] | None,
+) -> None:
+    assert _parse_nnunet_progress_line(line) == expected
 
 
 class FakeReportService:

@@ -16,8 +16,7 @@ from rag.embedding import (
     EmbeddingSetupError,
     create_bge_embeddings,
 )
-from rag.loader import ALLOWED_TOPICS
-from rag.schemas import RetrievedChunk
+from rag.schemas import ALLOWED_TOPICS, RetrievedChunk
 from rag.vector_store import MedicalFAISSStore, VectorStoreError, load_index_manifest
 
 

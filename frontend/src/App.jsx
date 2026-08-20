@@ -5,12 +5,17 @@ import {
   applyReportEdit,
   askAgent,
   cancelAnalysisTask,
+  cancelComparisonTask,
   checkHealth,
   downloadNifti,
   getCase,
+  getComparison,
+  getComparisonTask,
   generateReport,
   getAnalysisTask,
+  listCases,
   proposeReportEdit,
+  startComparisonTask,
   uploadMRI,
 } from "./api";
 import Icon from "./components/Icon";
@@ -32,6 +37,7 @@ const MODALITIES = [
 
 const NAVIGATION = [
   ["analysis", "brain", "影像工作台"],
+  ["comparison", "compare", "随访对比"],
   ["assistant", "chat", "医学助手"],
 ];
 
@@ -49,9 +55,26 @@ const REPORT_EDIT_ACTIONS = [
 
 const EMPTY_LAYERS = { wt: true, tc: true, et: true };
 const ACTIVE_CASE_STORAGE_KEY = "brain-tumor-agent.active-case";
+const ACTIVE_COMPARISON_TASK_STORAGE_KEY =
+  "brain-tumor-agent.active-comparison-task";
+const ACTIVE_ANALYSIS_STATUSES = ["queued", "running", "cancel_requested"];
+
+function isAnalysisTaskActive(task) {
+  return Boolean(task?.task_id && ACTIVE_ANALYSIS_STATUSES.includes(task.status));
+}
+
+function isComparisonTaskActive(task) {
+  return Boolean(task?.task_id && ACTIVE_ANALYSIS_STATUSES.includes(task.status));
+}
 
 function navigationFromHash() {
-  return window.location.hash === "#assistant" ? "assistant" : "analysis";
+  if (window.location.hash === "#assistant") {
+    return "assistant";
+  }
+  if (window.location.hash === "#comparison") {
+    return "comparison";
+  }
+  return "analysis";
 }
 
 function statusText(status) {
@@ -123,10 +146,22 @@ function App() {
   const [capabilities, setCapabilities] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [analysisTask, setAnalysisTask] = useState(null);
+  const [comparisonCases, setComparisonCases] = useState([]);
+  const [comparisonResult, setComparisonResult] = useState(null);
+  const [comparisonTask, setComparisonTask] = useState(null);
+  const [comparisonSpatial, setComparisonSpatial] = useState(null);
+  const [comparisonSlice, setComparisonSlice] = useState(0);
+  const [comparisonRegion, setComparisonRegion] = useState("wt");
+  const [patientGroupId, setPatientGroupId] = useState("");
+  const [baselineCaseId, setBaselineCaseId] = useState("");
+  const [followupCaseId, setFollowupCaseId] = useState("");
+  const [baselineStudyDate, setBaselineStudyDate] = useState("");
+  const [followupStudyDate, setFollowupStudyDate] = useState("");
 
   useEffect(() => {
     refreshApiStatus();
     restoreActiveCase();
+    restoreComparisonTask();
 
     const syncNavigation = () => setActiveNav(navigationFromHash());
     window.addEventListener("hashchange", syncNavigation);
@@ -134,7 +169,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!analysisTask?.task_id || !["queued", "running", "cancel_requested"].includes(analysisTask.status)) {
+    if (!isAnalysisTaskActive(analysisTask)) {
       return undefined;
     }
     let disposed = false;
@@ -165,6 +200,47 @@ function App() {
       window.clearInterval(timer);
     };
   }, [analysisTask?.task_id, analysisTask?.status]);
+
+  useEffect(() => {
+    if (!isComparisonTaskActive(comparisonTask)) {
+      return undefined;
+    }
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const task = await getComparisonTask(comparisonTask.task_id);
+        if (disposed) return;
+        setComparisonTask(task);
+        if (task.status === "succeeded") {
+          window.localStorage.removeItem(ACTIVE_COMPARISON_TASK_STORAGE_KEY);
+          await loadComparisonResult(task.comparison_id);
+        } else if (task.status === "failed") {
+          window.localStorage.removeItem(ACTIVE_COMPARISON_TASK_STORAGE_KEY);
+          showFeedback("error", task.error_message || "空间对比执行失败");
+        } else if (task.status === "cancelled") {
+          window.localStorage.removeItem(ACTIVE_COMPARISON_TASK_STORAGE_KEY);
+          showFeedback("warning", "空间对比任务已取消");
+        }
+      } catch (pollError) {
+        if (!disposed) {
+          showFeedback("error", pollError.message || "无法查询空间对比任务");
+        }
+      }
+    };
+    const timer = window.setInterval(poll, 2000);
+    poll();
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [comparisonTask?.task_id, comparisonTask?.status]);
+
+  useEffect(() => {
+    if (activeNav !== "comparison") {
+      return;
+    }
+    refreshComparisonCases();
+  }, [activeNav]);
 
   const maxSlice = useMemo(() => {
     const depths = Object.values(volumes)
@@ -243,17 +319,13 @@ function App() {
         setMaskUrl("");
       }
 
-      const taskActive = ["queued", "running", "cancel_requested"].includes(
-        restored.analysis_task?.status,
-      );
+      const taskActive = isAnalysisTaskActive(restored.analysis_task);
       setStatus(
         restored.status === "analyzed" || restored.status === "report_ready"
           ? "analyzed"
-          : taskActive || restored.status === "analyzing"
+          : taskActive
             ? "analyzing"
-            : restored.status === "analysis_failed"
-              ? "uploaded"
-              : "uploaded",
+            : "uploaded",
       );
       showFeedback("success", "已恢复上次病例及其分析结果");
     } catch {
@@ -345,9 +417,134 @@ function App() {
     try {
       const task = await cancelAnalysisTask(analysisTask.task_id);
       setAnalysisTask(task);
+      if (task.status === "cancelled") {
+        setStatus(metrics ? "analyzed" : "uploaded");
+      }
       showFeedback("warning", task.message);
     } catch (cancelError) {
       showFeedback("error", cancelError.message || "无法取消分析任务");
+    }
+  }
+
+  async function refreshComparisonCases() {
+    try {
+      const response = await listCases(true);
+      setComparisonCases(response.cases || []);
+    } catch (caseError) {
+      showFeedback("error", caseError.message || "无法读取已分析病例列表");
+    }
+  }
+
+  async function restoreComparisonTask() {
+    const taskId = window.localStorage.getItem(
+      ACTIVE_COMPARISON_TASK_STORAGE_KEY,
+    );
+    if (!taskId) return;
+    try {
+      const task = await getComparisonTask(taskId);
+      setComparisonTask(task);
+      if (task.status === "succeeded") {
+        window.localStorage.removeItem(ACTIVE_COMPARISON_TASK_STORAGE_KEY);
+        await loadComparisonResult(task.comparison_id);
+      } else if (!isComparisonTaskActive(task)) {
+        window.localStorage.removeItem(ACTIVE_COMPARISON_TASK_STORAGE_KEY);
+      }
+    } catch {
+      window.localStorage.removeItem(ACTIVE_COMPARISON_TASK_STORAGE_KEY);
+    }
+  }
+
+  async function handleCreateComparison(event) {
+    event.preventDefault();
+    if (
+      !patientGroupId.trim() ||
+      !baselineCaseId ||
+      !followupCaseId ||
+      !baselineStudyDate ||
+      !followupStudyDate
+    ) {
+      showFeedback("warning", "请完整选择病例并填写检查日期");
+      return;
+    }
+    setBusyAction("comparison");
+    setFeedback(null);
+    try {
+      const task = await startComparisonTask({
+        patient_group_id: patientGroupId.trim(),
+        baseline_case_id: baselineCaseId,
+        followup_case_id: followupCaseId,
+        baseline_study_date: baselineStudyDate,
+        followup_study_date: followupStudyDate,
+      });
+      setComparisonTask(task);
+      setComparisonResult(null);
+      setComparisonSpatial(null);
+      window.localStorage.setItem(
+        ACTIVE_COMPARISON_TASK_STORAGE_KEY,
+        task.task_id,
+      );
+      showFeedback("success", "空间对比任务已提交，可以查看实时进度");
+    } catch (comparisonError) {
+      setComparisonResult(null);
+      setComparisonSpatial(null);
+      showFeedback("error", comparisonError.message || "随访对比生成失败");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function loadComparisonResult(comparisonId) {
+    const result = await getComparison(comparisonId);
+    setComparisonResult(result);
+    if (!result.spatial_comparison_available) {
+      setComparisonSpatial(null);
+      showFeedback("success", "随访定量对比已生成；空间对比当前不可用");
+      return;
+    }
+    try {
+      const spatial = result.spatial_comparison;
+      const [baselineBuffer, followupBuffer, ...changeBuffers] =
+        await Promise.all([
+          downloadNifti(spatial.baseline_t1ce_url),
+          downloadNifti(spatial.artifacts.registered_followup_t1ce),
+          ...["wt", "tc", "et"].map((region) =>
+            downloadNifti(spatial.artifacts[`${region}_change`]),
+          ),
+        ]);
+      const [baseline, followup, ...changeMasks] = await Promise.all([
+        parseNiftiBuffer(baselineBuffer),
+        parseNiftiBuffer(followupBuffer),
+        ...changeBuffers.map(parseNiftiBuffer),
+      ]);
+      setComparisonSpatial({
+        baseline,
+        followup,
+        changes: Object.fromEntries(
+          ["wt", "tc", "et"].map((region, index) => [
+            region,
+            changeMasks[index],
+          ]),
+        ),
+      });
+      setComparisonSlice(findTumorSlice(changeMasks[0]));
+      showFeedback("success", "随访定量与空间变化对比已生成");
+    } catch (previewError) {
+      setComparisonSpatial(null);
+      showFeedback(
+        "warning",
+        `定量与空间计算已完成，但空间预览加载失败：${previewError.message}`,
+      );
+    }
+  }
+
+  async function handleCancelComparison() {
+    if (!comparisonTask?.task_id) return;
+    try {
+      const task = await cancelComparisonTask(comparisonTask.task_id);
+      setComparisonTask(task);
+      showFeedback("warning", task.message);
+    } catch (cancelError) {
+      showFeedback("error", cancelError.message || "无法取消空间对比任务");
     }
   }
 
@@ -442,7 +639,12 @@ function App() {
 
   function navigate(target) {
     setActiveNav(target);
-    const targetHash = target === "assistant" ? "#assistant" : "#workbench";
+    const targetHash =
+      target === "assistant"
+        ? "#assistant"
+        : target === "comparison"
+          ? "#comparison"
+          : "#workbench";
     if (window.location.hash !== targetHash) {
       window.location.hash = targetHash;
     }
@@ -908,6 +1110,36 @@ function App() {
             )}
           </section>
           )}
+
+          {activeNav === "comparison" && (
+            <LongitudinalPanel
+              baselineCaseId={baselineCaseId}
+              baselineStudyDate={baselineStudyDate}
+              busy={
+                busyAction === "comparison" ||
+                isComparisonTaskActive(comparisonTask)
+              }
+              cases={comparisonCases}
+              followupCaseId={followupCaseId}
+              followupStudyDate={followupStudyDate}
+              onBaselineCaseChange={setBaselineCaseId}
+              onBaselineDateChange={setBaselineStudyDate}
+              onCreate={handleCreateComparison}
+              onCancel={handleCancelComparison}
+              onFollowupCaseChange={setFollowupCaseId}
+              onFollowupDateChange={setFollowupStudyDate}
+              onPatientGroupChange={setPatientGroupId}
+              onRefresh={refreshComparisonCases}
+              patientGroupId={patientGroupId}
+              result={comparisonResult}
+              task={comparisonTask}
+              spatial={comparisonSpatial}
+              spatialRegion={comparisonRegion}
+              spatialSlice={comparisonSlice}
+              onSpatialRegionChange={setComparisonRegion}
+              onSpatialSliceChange={setComparisonSlice}
+            />
+          )}
         </main>
       </div>
 
@@ -919,6 +1151,325 @@ function App() {
       />
     </div>
   );
+}
+
+function LongitudinalPanel({
+  baselineCaseId,
+  baselineStudyDate,
+  busy,
+  cases,
+  followupCaseId,
+  followupStudyDate,
+  onBaselineCaseChange,
+  onBaselineDateChange,
+  onCancel,
+  onCreate,
+  onFollowupCaseChange,
+  onFollowupDateChange,
+  onPatientGroupChange,
+  onRefresh,
+  patientGroupId,
+  result,
+  task,
+  spatial,
+  spatialRegion,
+  spatialSlice,
+  onSpatialRegionChange,
+  onSpatialSliceChange,
+}) {
+  const ready =
+    patientGroupId.trim() &&
+    baselineCaseId &&
+    followupCaseId &&
+    baselineStudyDate &&
+    followupStudyDate &&
+    baselineCaseId !== followupCaseId;
+
+  return (
+    <section className="comparison-layout">
+      <aside className="comparison-controls">
+        <div className="comparison-heading">
+          <span className="section-kicker">Longitudinal MRI</span>
+          <h2>随访定量对比</h2>
+        </div>
+        <form onSubmit={onCreate}>
+          <label>
+            <span>去标识化检查组</span>
+            <input
+              maxLength="64"
+              onChange={(event) => onPatientGroupChange(event.target.value)}
+              pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}"
+              placeholder="例如 subject-001"
+              value={patientGroupId}
+            />
+          </label>
+          <fieldset>
+            <legend>基线检查</legend>
+            <label>
+              <span>病例</span>
+              <select
+                onChange={(event) => onBaselineCaseChange(event.target.value)}
+                value={baselineCaseId}
+              >
+                <option value="">选择已分析病例</option>
+                {cases.map((item) => (
+                  <option disabled={item.case_id === followupCaseId} key={item.case_id} value={item.case_id}>
+                    {item.case_id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>检查日期</span>
+              <input
+                onChange={(event) => onBaselineDateChange(event.target.value)}
+                type="date"
+                value={baselineStudyDate}
+              />
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>随访检查</legend>
+            <label>
+              <span>病例</span>
+              <select
+                onChange={(event) => onFollowupCaseChange(event.target.value)}
+                value={followupCaseId}
+              >
+                <option value="">选择已分析病例</option>
+                {cases.map((item) => (
+                  <option disabled={item.case_id === baselineCaseId} key={item.case_id} value={item.case_id}>
+                    {item.case_id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>检查日期</span>
+              <input
+                min={baselineStudyDate || undefined}
+                onChange={(event) => onFollowupDateChange(event.target.value)}
+                type="date"
+                value={followupStudyDate}
+              />
+            </label>
+          </fieldset>
+          <div className="comparison-actions">
+            <button className="primary-button" disabled={!ready || busy} type="submit">
+              <Icon name="compare" size={17} />
+              {busy ? `正在计算 ${task?.progress || 0}%` : "生成定量对比"}
+            </button>
+            <button className="secondary-button" disabled={busy} onClick={onRefresh} type="button">
+              刷新病例
+            </button>
+          </div>
+          {isComparisonTaskActive(task) && (
+            <div className="comparison-progress" aria-live="polite">
+              <div>
+                <span>{task.message}</span>
+                <strong>{task.progress}%</strong>
+              </div>
+              <progress max="100" value={task.progress} />
+              <button className="secondary-button" onClick={onCancel} type="button">
+                取消任务
+              </button>
+            </div>
+          )}
+        </form>
+        <div className="comparison-scope">
+          <Icon name="shield" size={17} />
+          <span>仅比较自动分割定量结果，不作进展或疗效判断。</span>
+        </div>
+      </aside>
+
+      <div className="comparison-results">
+        {result ? (
+          <>
+            <header className="comparison-result-header">
+              <div>
+                <span className="section-kicker">{result.patient_group_id}</span>
+                <h2>{result.interval_days} 天随访变化</h2>
+              </div>
+              <span className="review-badge">需医师审核</span>
+            </header>
+            <div className="comparison-summary">
+              <div>
+                <span>基线</span>
+                <strong>{result.baseline_case_id}</strong>
+                <small>{result.baseline_study_date}</small>
+              </div>
+              <Icon name="compare" size={22} />
+              <div>
+                <span>随访</span>
+                <strong>{result.followup_case_id}</strong>
+                <small>{result.followup_study_date}</small>
+              </div>
+            </div>
+            <div className="comparison-table-wrap">
+              <table className="comparison-table">
+                <thead>
+                  <tr>
+                    <th>指标</th>
+                    <th>基线</th>
+                    <th>随访</th>
+                    <th>变化量</th>
+                    <th>变化率</th>
+                    <th>方向</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.metrics.map((metric) => (
+                    <tr key={metric.key}>
+                      <th>{metric.label}</th>
+                      <td>{formatComparisonValue(metric.baseline, metric.unit)}</td>
+                      <td>{formatComparisonValue(metric.followup, metric.unit)}</td>
+                      <td className={`change ${metric.direction}`}>
+                        {formatSignedChange(metric)}
+                      </td>
+                      <td>
+                        {metric.percent_change === null
+                          ? "—"
+                          : `${signed(metric.percent_change)}%`}
+                      </td>
+                      <td>{directionLabel(metric.direction)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="location-comparison">
+              <span>主要位置</span>
+              <strong>{normalizeLocation(result.baseline_location)}</strong>
+              <Icon name="compare" size={16} />
+              <strong>{normalizeLocation(result.followup_location)}</strong>
+              <small>{result.location_consistent ? "位置描述一致" : "位置描述存在差异"}</small>
+            </div>
+            {result.spatial_comparison_available && spatial ? (
+              <SpatialComparisonViewer
+                data={result.spatial_comparison}
+                onRegionChange={onSpatialRegionChange}
+                onSliceChange={onSpatialSliceChange}
+                region={spatialRegion}
+                slice={spatialSlice}
+                volumes={spatial}
+              />
+            ) : (
+              <div className="comparison-limit">
+                空间对比不可用：
+                {result.spatial_comparison?.unavailable_reason ||
+                  result.spatial_comparison?.quality?.warnings?.join("；") ||
+                  "缺少配准影像或配准质控未通过"}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="comparison-empty">
+            <Icon name="compare" size={32} />
+            <strong>尚未生成随访对比</strong>
+            <p>可用已完成定量分析的病例：{cases.length} 例</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SpatialComparisonViewer({
+  data,
+  onRegionChange,
+  onSliceChange,
+  region,
+  slice,
+  volumes,
+}) {
+  const regionChanges = data.changes[region];
+  const maxSlice = Math.max(0, volumes.baseline.depth - 1);
+  return (
+    <section className="spatial-comparison">
+      <header>
+        <div>
+          <span className="section-kicker">Rigid registration QC passed</span>
+          <h3>空间变化对比</h3>
+        </div>
+        <div className="spatial-region-tabs" aria-label="肿瘤区域">
+          {["wt", "tc", "et"].map((item) => (
+            <button
+              className={region === item ? "active" : ""}
+              key={item}
+              onClick={() => onRegionChange(item)}
+              type="button"
+            >
+              {item.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </header>
+      <div className="spatial-viewports">
+        <MriViewport
+          changeMask={volumes.changes[region]}
+          layers={EMPTY_LAYERS}
+          opacity={0.62}
+          slice={slice}
+          title="基线 T1ce"
+          volume={volumes.baseline}
+        />
+        <MriViewport
+          changeMask={volumes.changes[region]}
+          layers={EMPTY_LAYERS}
+          opacity={0.62}
+          slice={slice}
+          title="配准后随访 T1ce"
+          volume={volumes.followup}
+        />
+      </div>
+      <div className="spatial-slice-control">
+        <span>切片 {slice + 1} / {maxSlice + 1}</span>
+        <input
+          max={maxSlice}
+          min="0"
+          onChange={(event) => onSliceChange(Number(event.target.value))}
+          type="range"
+          value={Math.min(slice, maxSlice)}
+        />
+      </div>
+      <div className="change-legend">
+        <span><i className="resolved" />消退 {regionChanges.resolved_volume_cm3.toFixed(2)} cm³</span>
+        <span><i className="persistent" />持续 {regionChanges.persistent_volume_cm3.toFixed(2)} cm³</span>
+        <span><i className="new" />新增 {regionChanges.new_volume_cm3.toFixed(2)} cm³</span>
+      </div>
+      <div className="registration-quality">
+        <span>相关性 {data.quality.correlation_before.toFixed(3)} → {data.quality.correlation_after.toFixed(3)}</span>
+        <span>脑区重叠 {data.quality.foreground_dice.toFixed(3)}</span>
+        <span>仅刚性配准</span>
+      </div>
+    </section>
+  );
+}
+
+function formatComparisonValue(value, unit) {
+  const suffix = unit === "cm3" ? " cm³" : unit === "%" ? "%" : ` ${unit}`;
+  return `${Number(value).toFixed(unit === "mm" ? 1 : 2)}${suffix}`;
+}
+
+function signed(value) {
+  const number = Number(value);
+  return `${number > 0 ? "+" : ""}${number.toFixed(2)}`;
+}
+
+function formatSignedChange(metric) {
+  if (metric.percentage_point_change !== null) {
+    return `${signed(metric.percentage_point_change)} 个百分点`;
+  }
+  const unit = metric.unit === "cm3" ? "cm³" : metric.unit;
+  return `${signed(metric.absolute_change)} ${unit}`;
+}
+
+function directionLabel(direction) {
+  return {
+    increased: "增加",
+    decreased: "减少",
+    unchanged: "不变",
+  }[direction];
 }
 
 function Metric({ color, label, value }) {

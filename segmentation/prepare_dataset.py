@@ -16,7 +16,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -476,7 +476,11 @@ def format_command(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
-def run_command(command: Sequence[str], dry_run: bool = False) -> None:
+def run_command(
+    command: Sequence[str],
+    dry_run: bool = False,
+    output_callback: Callable[[str], None] | None = None,
+) -> None:
     """安全执行nnU-Net命令，不使用shell字符串拼接。"""
 
     print(f"$ {format_command(command)}")
@@ -498,7 +502,53 @@ def run_command(command: Sequence[str], dry_run: bool = False) -> None:
         raise SegmentationSetupError(
             f"找不到命令{command[0]}，请先安装nnunetv2并激活正确的Python环境"
         )
-    subprocess.run([executable, *command[1:]], check=True)
+    resolved_command = [executable, *command[1:]]
+    if output_callback is None:
+        subprocess.run(resolved_command, check=True)
+        return
+
+    process = subprocess.Popen(
+        resolved_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        bufsize=1,
+    )
+    assert process.stdout is not None
+    buffered: list[str] = []
+
+    def emit_buffer() -> None:
+        if not buffered:
+            return
+        line = "".join(buffered).strip()
+        buffered.clear()
+        if line:
+            print(line, file=sys.stderr, flush=True)
+            output_callback(line)
+
+    try:
+        while True:
+            character = process.stdout.read(1)
+            if character == "":
+                break
+            if character in {"\r", "\n"}:
+                emit_buffer()
+            else:
+                buffered.append(character)
+        emit_buffer()
+        return_code = process.wait()
+    except BaseException:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise
+
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, resolved_command)
 
 
 def build_plan_and_preprocess_command(

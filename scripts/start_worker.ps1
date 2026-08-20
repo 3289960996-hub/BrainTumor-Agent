@@ -21,5 +21,7 @@ Write-Host "Starting MRI analysis worker (concurrency=$Concurrency)"
 & $pythonPath -m celery -A backend.app.tasks.celery_app:celery_app worker `
     --loglevel=INFO `
     --pool=solo `
-    --concurrency=$Concurrency
+    --concurrency=$Concurrency `
+    --without-mingle `
+    --without-gossip
 exit $LASTEXITCODE

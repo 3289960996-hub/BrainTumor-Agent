@@ -23,6 +23,7 @@ build/
 # JavaScript
 frontend/node_modules/
 frontend/dist/
+frontend/dist-*/
 frontend/.vite/
 frontend/.vite-cache/
 npm-debug.log*

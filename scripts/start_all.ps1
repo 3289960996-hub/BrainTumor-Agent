@@ -2,6 +2,7 @@ param(
     [string]$BindAddress = "127.0.0.1",
     [int]$BackendPort = 8000,
     [int]$FrontendPort = 5173,
+    [string]$RedisServerPath = $env:BTA_REDIS_SERVER,
     [switch]$NoBrowser
 )
 
@@ -15,16 +16,6 @@ $statePath = Join-Path $runRoot "services.json"
 
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $redisRoot -Force | Out-Null
-
-if (Test-Path -LiteralPath $statePath -PathType Leaf) {
-    $existing = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-    if ($existing.worker_pid -and (Get-Process -Id $existing.worker_pid -ErrorAction SilentlyContinue)) {
-        $existingUrl = "http://${BindAddress}:$FrontendPort/"
-        Write-Host "BrainTumor-Agent is already running: $existingUrl" -ForegroundColor Green
-        exit 0
-    }
-    Remove-Item -LiteralPath $statePath -Force
-}
 
 function Test-TcpPort([string]$Address, [int]$Port) {
     $client = [System.Net.Sockets.TcpClient]::new()
@@ -99,26 +90,91 @@ function Wait-DockerEngine([string]$DockerCli) {
     throw "Docker Desktop did not become ready within 3 minutes."
 }
 
+function Test-WorkerReady {
+    $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
+        return $false
+    }
+    try {
+        & $pythonPath -c @"
+from backend.app.tasks.celery_app import celery_app
+raise SystemExit(0 if celery_app.control.inspect(timeout=2).ping() else 1)
+"@ 2>$null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    }
+}
+
+function Wait-Worker {
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (Test-WorkerReady) {
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "Analysis Worker did not become ready. See $logRoot\worker.err.log for details."
+}
+
+function Find-RedisServer([string]$ConfiguredPath) {
+    if ($ConfiguredPath) {
+        if (-not (Test-Path -LiteralPath $ConfiguredPath -PathType Leaf)) {
+            throw "Configured Redis server was not found: $ConfiguredPath"
+        }
+        return (Resolve-Path -LiteralPath $ConfiguredPath).Path
+    }
+
+    $command = Get-Command redis-server.exe -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $candidates = @(
+        (Join-Path $projectRoot "runtime\tools\redis\redis-server.exe"),
+        (Join-Path $projectRoot "runtime\tools\memurai-package\Memurai\memurai.exe"),
+        (Join-Path $projectRoot "runtime\tools\memurai\memurai.exe"),
+        "E:\Redis\redis-server.exe",
+        "E:\Program Files\Redis\redis-server.exe",
+        "E:\Program Files\Memurai\memurai.exe",
+        (Join-Path $env:ProgramFiles "Redis\redis-server.exe"),
+        (Join-Path $env:ProgramFiles "Memurai\memurai.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Redis\redis-server.exe")
+    )
+    return $candidates |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        Select-Object -First 1
+}
+
 function Start-ManagedProcess(
     [string]$Name,
-    [string]$ScriptPath,
-    [string[]]$ScriptArguments
+    [string]$FilePath,
+    [string[]]$Arguments,
+    [string]$WorkingDirectory = $projectRoot
 ) {
     $outputPath = Join-Path $logRoot "$Name.out.log"
     $errorPath = Join-Path $logRoot "$Name.err.log"
-    $arguments = @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", $ScriptPath
-    ) + $ScriptArguments
     return Start-Process `
-        -FilePath "powershell.exe" `
-        -ArgumentList $arguments `
-        -WorkingDirectory $projectRoot `
+        -FilePath $FilePath `
+        -ArgumentList $Arguments `
+        -WorkingDirectory $WorkingDirectory `
         -WindowStyle Hidden `
         -RedirectStandardOutput $outputPath `
         -RedirectStandardError $errorPath `
         -PassThru
+}
+
+if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+    $existing = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if (
+        (Test-TcpPort $BindAddress $BackendPort) -and
+        (Test-TcpPort $BindAddress $FrontendPort) -and
+        (Test-WorkerReady)
+    ) {
+        $existingUrl = "http://${BindAddress}:$FrontendPort/"
+        Write-Host "BrainTumor-Agent is already running: $existingUrl" -ForegroundColor Green
+        exit 0
+    }
+    Remove-Item -LiteralPath $statePath -Force
 }
 
 $state = [ordered]@{
@@ -131,11 +187,17 @@ $state = [ordered]@{
 }
 
 if (-not (Test-TcpPort "127.0.0.1" 6379)) {
-    $redisServer = Get-Command redis-server.exe -ErrorAction SilentlyContinue
+    $redisServer = Find-RedisServer $RedisServerPath
     if ($redisServer) {
         $redisProcess = Start-Process `
-            -FilePath $redisServer.Source `
-            -ArgumentList @("--port", "6379", "--appendonly", "yes") `
+            -FilePath $redisServer `
+            -ArgumentList @(
+                "--bind", "127.0.0.1",
+                "--protected-mode", "yes",
+                "--port", "6379",
+                "--appendonly", "yes",
+                "--dir", $redisRoot
+            ) `
             -WorkingDirectory $redisRoot `
             -WindowStyle Hidden `
             -RedirectStandardOutput (Join-Path $logRoot "redis.out.log") `
@@ -164,28 +226,46 @@ if (-not (Test-TcpPort "127.0.0.1" 6379)) {
 }
 
 if (-not (Test-TcpPort $BindAddress $BackendPort)) {
-    $backend = Start-ManagedProcess "backend" (Join-Path $PSScriptRoot "start_backend.ps1") @(
-        "-BindAddress", $BindAddress,
-        "-Port", $BackendPort.ToString(),
-        "-NoReload"
+    $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
+    $backend = Start-ManagedProcess "backend" $pythonPath @(
+        "-m", "uvicorn", "backend.app.main:app",
+        "--host", $BindAddress,
+        "--port", $BackendPort.ToString()
     )
     $state.backend_pid = $backend.Id
 }
 
-$worker = Start-ManagedProcess "worker" (Join-Path $PSScriptRoot "start_worker.ps1") @()
-$state.worker_pid = $worker.Id
+if (-not (Test-WorkerReady)) {
+    $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
+    $worker = Start-ManagedProcess "worker" $pythonPath @(
+        "-m", "celery",
+        "-A", "backend.app.tasks.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--pool=solo",
+        "--concurrency=1",
+        "--without-mingle",
+        "--without-gossip"
+    )
+    $state.worker_pid = $worker.Id
+}
 
 if (-not (Test-TcpPort $BindAddress $FrontendPort)) {
-    $frontend = Start-ManagedProcess "frontend" (Join-Path $PSScriptRoot "start_frontend.ps1") @(
-        "-BindAddress", $BindAddress,
-        "-Port", $FrontendPort.ToString()
-    )
+    $nodePath = (Get-Command node.exe -ErrorAction Stop).Source
+    $vitePath = Join-Path $projectRoot "frontend\node_modules\vite\bin\vite.js"
+    $frontend = Start-ManagedProcess "frontend" $nodePath @(
+        $vitePath,
+        "--configLoader", "runner",
+        "--host", $BindAddress,
+        "--port", $FrontendPort.ToString()
+    ) (Join-Path $projectRoot "frontend")
     $state.frontend_pid = $frontend.Id
 }
 
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
 Wait-Http "http://${BindAddress}:$BackendPort/api/v1/health" "Backend"
 Wait-Http "http://${BindAddress}:$FrontendPort/" "Frontend"
+Wait-Worker
 
 $appUrl = "http://${BindAddress}:$FrontendPort/"
 Write-Host "BrainTumor-Agent is ready: $appUrl" -ForegroundColor Green

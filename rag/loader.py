@@ -14,12 +14,8 @@ from typing import Any, Protocol
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-ALLOWED_TOPICS = {
-    "who_cns",
-    "nccn_glioma",
-    "glioma_mri",
-    "follow_up_criteria",
-}
+from rag.schemas import ALLOWED_TOPICS
+
 DOCUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$")
 
 

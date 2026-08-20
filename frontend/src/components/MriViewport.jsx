@@ -8,6 +8,12 @@ const COLORS = {
   et: [168, 85, 247],
 };
 
+const CHANGE_COLORS = {
+  1: [59, 130, 246],
+  2: [234, 179, 8],
+  3: [239, 68, 68],
+};
+
 function selectedColor(label, layers) {
   if (label === 4 && layers.et) {
     return COLORS.et;
@@ -25,6 +31,7 @@ export default function MriViewport({
   title,
   volume,
   mask,
+  changeMask,
   slice,
   opacity,
   layers,
@@ -41,18 +48,21 @@ export default function MriViewport({
     const context = canvas.getContext("2d");
     const pixels = grayscaleSlice(volume, slice);
 
+    const overlay = changeMask || mask;
     if (
-      mask &&
-      mask.width === volume.width &&
-      mask.height === volume.height
+      overlay &&
+      overlay.width === volume.width &&
+      overlay.height === volume.height
     ) {
-      const maskSlice = Math.min(mask.depth - 1, slice);
+      const maskSlice = Math.min(overlay.depth - 1, slice);
       const alpha = Math.min(0.85, Math.max(0, opacity));
       for (let y = 0; y < volume.height; y += 1) {
         const flippedY = volume.height - 1 - y;
         for (let x = 0; x < volume.width; x += 1) {
-          const label = Math.round(voxelValue(mask, x, y, maskSlice));
-          const color = selectedColor(label, layers);
+          const label = Math.round(voxelValue(overlay, x, y, maskSlice));
+          const color = changeMask
+            ? CHANGE_COLORS[label] || null
+            : selectedColor(label, layers);
           if (!color) {
             continue;
           }
@@ -75,7 +85,7 @@ export default function MriViewport({
       0,
       0,
     );
-  }, [volume, mask, slice, opacity, layers]);
+  }, [volume, mask, changeMask, slice, opacity, layers]);
 
   return (
     <article className="mri-viewport">

@@ -17,6 +17,12 @@ const paths = {
       <path d="M14.5 4.5A3.5 3.5 0 0 1 18 8v1a3 3 0 0 1 2 5.6 3.5 3.5 0 0 1-5.5 4.4M12 3v18M8 9h4m0 6h4" />
     </>
   ),
+  compare: (
+    <>
+      <path d="M7 7h13m0 0-3-3m3 3-3 3" />
+      <path d="M17 17H4m0 0 3 3m-3-3 3-3" />
+    </>
+  ),
   monitor: (
     <>
       <rect x="3" y="4" width="18" height="13" rx="2" />

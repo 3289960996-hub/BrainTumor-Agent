@@ -90,7 +90,7 @@ def test_processor_saves_nnunet_compatible_files(tmp_path: Path) -> None:
     metadata = json.loads(result.metadata_path.read_text(encoding="utf-8"))
     assert metadata["shape"] == [8, 9, 10]
     assert metadata["spacing"] == pytest.approx([1.0, 1.0, 1.0])
-    assert metadata["normalization"]["method"] == "monai.NormalizeIntensity"
+    assert metadata["normalization"]["method"] == "numpy.channel_wise_zscore"
 
     for modality in REQUIRED_MODALITIES:
         output_path = result.modality_files[modality]

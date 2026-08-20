@@ -3,6 +3,13 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+ALLOWED_TOPICS = {
+    "who_cns",
+    "nccn_glioma",
+    "glioma_mri",
+    "follow_up_criteria",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeDocument:

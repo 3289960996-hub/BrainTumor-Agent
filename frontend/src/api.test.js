@@ -9,6 +9,12 @@ import {
   generateReport,
   getAnalysisTask,
   cancelAnalysisTask,
+  cancelComparisonTask,
+  createComparison,
+  getComparison,
+  getComparisonTask,
+  listCases,
+  startComparisonTask,
 } from "./api.js";
 
 function jsonResponse(payload, status = 200) {
@@ -34,6 +40,24 @@ test("前端API方法调用FastAPI对应路由", async (context) => {
   await analyzeCase("case-001");
   await getAnalysisTask("task-001");
   await cancelAnalysisTask("task-001");
+  await listCases(true);
+  await createComparison({
+    patient_group_id: "subject-001",
+    baseline_case_id: "case-001",
+    followup_case_id: "case-002",
+    baseline_study_date: "2026-01-01",
+    followup_study_date: "2026-04-01",
+  });
+  await getComparison("comparison-0123456789abcdef0123");
+  await startComparisonTask({
+    patient_group_id: "subject-001",
+    baseline_case_id: "case-001",
+    followup_case_id: "case-002",
+    baseline_study_date: "2026-01-01",
+    followup_study_date: "2026-04-01",
+  });
+  await getComparisonTask("comparison-task-001");
+  await cancelComparisonTask("comparison-task-001");
   await generateReport("case-001");
   await askAgent("总结该MRI分析结果", "case-001");
 
@@ -44,6 +68,12 @@ test("前端API方法调用FastAPI对应路由", async (context) => {
       "/api/v1/analyze",
       "/api/v1/analysis-tasks/task-001",
       "/api/v1/analysis-tasks/task-001/cancel",
+      "/api/v1/cases?analyzed_only=true",
+      "/api/v1/comparisons",
+      "/api/v1/comparisons/comparison-0123456789abcdef0123",
+      "/api/v1/comparison-tasks",
+      "/api/v1/comparison-tasks/comparison-task-001",
+      "/api/v1/comparison-tasks/comparison-task-001/cancel",
       "/api/v1/report",
       "/api/v1/chat",
     ],
@@ -52,10 +82,25 @@ test("前端API方法调用FastAPI对应路由", async (context) => {
     case_id: "case-001",
   });
   assert.equal(calls[3].options.method, "POST");
-  assert.deepEqual(JSON.parse(calls[4].options.body), {
+  assert.deepEqual(JSON.parse(calls[5].options.body), {
+    patient_group_id: "subject-001",
+    baseline_case_id: "case-001",
+    followup_case_id: "case-002",
+    baseline_study_date: "2026-01-01",
+    followup_study_date: "2026-04-01",
+  });
+  assert.deepEqual(JSON.parse(calls[7].options.body), {
+    patient_group_id: "subject-001",
+    baseline_case_id: "case-001",
+    followup_case_id: "case-002",
+    baseline_study_date: "2026-01-01",
+    followup_study_date: "2026-04-01",
+  });
+  assert.equal(calls[9].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[10].options.body), {
     case_id: "case-001",
   });
-  assert.deepEqual(JSON.parse(calls[5].options.body), {
+  assert.deepEqual(JSON.parse(calls[11].options.body), {
     question: "总结该MRI分析结果",
     case_id: "case-001",
   });

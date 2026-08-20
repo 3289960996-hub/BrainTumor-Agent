@@ -1,15 +1,12 @@
 """FastAPI依赖工厂及生产环境默认实现。"""
 
+from __future__ import annotations
+
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from agent.qwen import QwenAgentConfig
 from backend.app.core.config import get_settings
-from backend.app.services.analysis import (
-    MRIAnalysisPipeline,
-    MRIProcessingService,
-    NNUNetInferenceConfig,
-    NNUNetInferenceService,
-)
 from backend.app.services.chat import MedicalAgentChatService
 from backend.app.services.reporting import (
     MedicalReportEditingService,
@@ -17,7 +14,12 @@ from backend.app.services.reporting import (
 )
 from backend.app.services.storage import AnalysisTaskRepository, CaseRepository
 from backend.app.services.upload import MRIUploadService
+from longitudinal.service import LongitudinalComparisonService
+from longitudinal.storage import ComparisonRepository, ComparisonTaskRepository
 from report.generator import ReportConfig
+
+if TYPE_CHECKING:
+    from backend.app.services.analysis import MRIAnalysisPipeline
 
 
 def _api_key() -> str:
@@ -38,6 +40,26 @@ def get_analysis_task_repository() -> AnalysisTaskRepository:
 
 
 @lru_cache
+def get_comparison_repository() -> ComparisonRepository:
+    settings = get_settings()
+    return ComparisonRepository(settings.data_root)
+
+
+@lru_cache
+def get_comparison_task_repository() -> ComparisonTaskRepository:
+    settings = get_settings()
+    return ComparisonTaskRepository(settings.data_root)
+
+
+@lru_cache
+def get_longitudinal_comparison_service() -> LongitudinalComparisonService:
+    return LongitudinalComparisonService(
+        get_case_repository(),
+        get_comparison_repository(),
+    )
+
+
+@lru_cache
 def get_upload_service() -> MRIUploadService:
     settings = get_settings()
     return MRIUploadService(
@@ -48,6 +70,15 @@ def get_upload_service() -> MRIUploadService:
 
 @lru_cache
 def get_analysis_pipeline() -> MRIAnalysisPipeline:
+    # Only the Celery worker needs the heavy preprocessing/nnU-Net dependency tree.
+    # Keeping this import local prevents the FastAPI process from loading PyTorch.
+    from backend.app.services.analysis import (
+        MRIAnalysisPipeline,
+        MRIProcessingService,
+        NNUNetInferenceConfig,
+        NNUNetInferenceService,
+    )
+
     settings = get_settings()
     predictor = NNUNetInferenceService(
         NNUNetInferenceConfig(
@@ -135,4 +166,7 @@ def clear_service_caches() -> None:
     get_report_editing_service.cache_clear()
     get_chat_service.cache_clear()
     get_analysis_task_repository.cache_clear()
+    get_longitudinal_comparison_service.cache_clear()
+    get_comparison_repository.cache_clear()
+    get_comparison_task_repository.cache_clear()
     get_case_repository.cache_clear()

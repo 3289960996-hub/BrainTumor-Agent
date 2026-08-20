@@ -9,7 +9,7 @@ celery_app = Celery(
     "brain_tumor_agent",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["backend.app.tasks.analysis"],
+    include=["backend.app.tasks.analysis", "backend.app.tasks.comparison"],
 )
 celery_app.conf.update(
     task_always_eager=settings.celery_task_always_eager,

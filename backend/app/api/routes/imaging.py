@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
@@ -11,6 +12,7 @@ from backend.app.schemas.imaging import (
     AnalysisTaskResponse,
     AnalyzeRequest,
     AnalyzeResponse,
+    CaseListResponse,
     CaseRestoreResponse,
     ChatRequest,
     ChatResponse,
@@ -40,10 +42,39 @@ from backend.app.services.reporting import (
 )
 from backend.app.services.storage import AnalysisTaskRepository, CaseRepository
 from backend.app.services.upload import MRIUploadService
-from backend.app.tasks.analysis import run_analysis
+from backend.app.tasks.celery_app import celery_app
 from data_process.constants import MRIModality
 
 router = APIRouter()
+
+
+def _restore_idle_case_status(repository: CaseRepository, case_id: str) -> None:
+    paths = repository.require_case(case_id)
+    if paths.mask.is_file() and paths.features.is_file():
+        restored_status = "report_ready" if paths.report.is_file() else "analyzed"
+    else:
+        restored_status = "uploaded"
+    repository.write_status(case_id, restored_status)
+
+
+def _analysis_worker_available() -> bool:
+    try:
+        replies = celery_app.control.inspect(timeout=1.0).ping()
+    except Exception:
+        return False
+    return bool(replies)
+
+
+@router.get(
+    "/cases",
+    response_model=CaseListResponse,
+    summary="列出去标识化病例摘要",
+)
+def list_cases(
+    repository: Annotated[CaseRepository, Depends(get_case_repository)],
+    analyzed_only: bool = False,
+) -> CaseListResponse:
+    return CaseListResponse(cases=repository.list_cases(analyzed_only=analyzed_only))
 
 
 @router.post(
@@ -96,10 +127,31 @@ def analyze_mri(
     ],
 ) -> AnalyzeResponse:
     repository.require_case(payload.case_id)
+    if (
+        repository.read_status(payload.case_id).get("status") == "analyzing"
+        and tasks.find_active_for_case(payload.case_id) is None
+    ):
+        _restore_idle_case_status(repository, payload.case_id)
     task, created = tasks.create(payload.case_id)
     if created:
+        if not _analysis_worker_available():
+            tasks.update(
+                task["task_id"],
+                status="failed",
+                stage="dispatch_failed",
+                message="分析Worker未就绪",
+                error_code="task_queue_unavailable",
+                error_message="分析Worker未启动、正在退出或当前无法响应",
+                finished_at=datetime.now(UTC).isoformat(),
+            )
+            _restore_idle_case_status(repository, payload.case_id)
+            raise TaskQueueUnavailableError()
         try:
-            run_analysis.apply_async(args=[task["task_id"], payload.case_id])
+            celery_app.send_task(
+                "analysis.run",
+                args=[task["task_id"], payload.case_id],
+                task_id=task["task_id"],
+            )
         except Exception as exc:
             tasks.update(
                 task["task_id"],
@@ -156,13 +208,28 @@ def get_analysis_task(
 def cancel_analysis_task(
     task_id: str,
     request: Request,
+    repository: Annotated[CaseRepository, Depends(get_case_repository)],
     tasks: Annotated[
         AnalysisTaskRepository,
         Depends(get_analysis_task_repository),
     ],
 ) -> AnalysisTaskResponse:
     task = tasks.get(task_id)
-    if task["status"] in {"queued", "running"}:
+    if task["status"] == "queued":
+        task = tasks.update(
+            task_id,
+            status="cancelled",
+            stage="cancelled",
+            message="排队任务已取消，可以重新发起分析",
+            finished_at=datetime.now(UTC).isoformat(),
+        )
+        try:
+            celery_app.control.revoke(task_id)
+        except Exception:
+            # The persisted cancelled state remains authoritative if Redis is down.
+            pass
+        _restore_idle_case_status(repository, str(task["case_id"]))
+    elif task["status"] == "running":
         task = tasks.update(
             task_id,
             status="cancel_requested",

@@ -53,6 +53,24 @@ class AnalysisTaskNotFoundError(BackendServiceError):
         )
 
 
+class ComparisonNotFoundError(BackendServiceError):
+    def __init__(self, comparison_id: str) -> None:
+        super().__init__(
+            f"随访对比不存在：{comparison_id}",
+            code="comparison_not_found",
+            status_code=404,
+        )
+
+
+class ComparisonTaskNotFoundError(BackendServiceError):
+    def __init__(self, task_id: str) -> None:
+        super().__init__(
+            f"空间对比任务不存在：{task_id}",
+            code="comparison_task_not_found",
+            status_code=404,
+        )
+
+
 class TaskQueueUnavailableError(BackendServiceError):
     def __init__(self) -> None:
         super().__init__(

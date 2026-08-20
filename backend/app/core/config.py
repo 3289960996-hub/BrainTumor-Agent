@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = Field(default=1024, ge=1, le=4096)
 
     database_url: str = "sqlite:///./runtime/brain_tumor_agent.db"
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = "redis://127.0.0.1:6379/0"
     celery_task_always_eager: bool = False
     analysis_task_max_retries: int = Field(default=1, ge=0, le=5)
     analysis_task_retry_delay_seconds: int = Field(default=30, ge=0, le=3600)

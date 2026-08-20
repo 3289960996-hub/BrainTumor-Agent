@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
+import os
+import re
 import subprocess
 import threading
 from collections.abc import Callable
@@ -28,6 +31,37 @@ from segmentation.prepare_dataset import (
 from segmentation.train import configure_device, normalize_folds
 
 ANALYSIS_CACHE_VERSION = 2
+MIN_CPU_INFERENCE_COMMIT_BYTES = 4 * 1024**3
+NNUNET_PROGRESS_PATTERN = re.compile(
+    r"(?P<percent>\d{1,3})%\|.*?\|\s*(?P<current>\d+)/(?P<total>\d+)"
+)
+NNUNET_COLLECTION_PREFIX = "Collecting results:"
+
+AnalysisProgressCallback = Callable[[str, int, str], None]
+
+
+class _MemoryStatusEx(ctypes.Structure):
+    _fields_ = [
+        ("length", ctypes.c_ulong),
+        ("memory_load", ctypes.c_ulong),
+        ("total_physical", ctypes.c_ulonglong),
+        ("available_physical", ctypes.c_ulonglong),
+        ("total_page_file", ctypes.c_ulonglong),
+        ("available_page_file", ctypes.c_ulonglong),
+        ("total_virtual", ctypes.c_ulonglong),
+        ("available_virtual", ctypes.c_ulonglong),
+        ("available_extended_virtual", ctypes.c_ulonglong),
+    ]
+
+
+def _available_commit_bytes() -> int | None:
+    if os.name != "nt":
+        return None
+    status = _MemoryStatusEx()
+    status.length = ctypes.sizeof(status)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        return None
+    return int(status.available_page_file)
 
 
 class AnalysisCancellationRequested(Exception):
@@ -40,7 +74,13 @@ class PreprocessorProtocol(Protocol):
 
 
 class PredictorProtocol(Protocol):
-    def predict(self, input_dir: Path, output_root: Path, case_id: str) -> Path:
+    def predict(
+        self,
+        input_dir: Path,
+        output_root: Path,
+        case_id: str,
+        progress: AnalysisProgressCallback | None = None,
+    ) -> Path:
         """返回BraTS标签空间的mask。"""
 
 
@@ -102,15 +142,22 @@ class NNUNetInferenceService:
         # 单进程内串行使用GPU，避免多个病例并行推理造成显存竞争。
         self._inference_lock = threading.Lock()
 
-    def predict(self, input_dir: Path, output_root: Path, case_id: str) -> Path:
+    def predict(
+        self,
+        input_dir: Path,
+        output_root: Path,
+        case_id: str,
+        progress: AnalysisProgressCallback | None = None,
+    ) -> Path:
         with self._inference_lock:
-            return self._predict_locked(input_dir, output_root, case_id)
+            return self._predict_locked(input_dir, output_root, case_id, progress)
 
     def _predict_locked(
         self,
         input_dir: Path,
         output_root: Path,
         case_id: str,
+        progress: AnalysisProgressCallback | None = None,
     ) -> Path:
         brats_output = output_root / "brats_predictions"
         restored_mask = brats_output / f"{case_id}.nii.gz"
@@ -124,6 +171,18 @@ class NNUNetInferenceService:
             )
         if restored_mask.is_file():
             return restored_mask
+
+        if self.config.device == "cpu":
+            available_commit = _available_commit_bytes()
+            if (
+                available_commit is not None
+                and available_commit < MIN_CPU_INFERENCE_COMMIT_BYTES
+            ):
+                available_gb = available_commit / 1024**3
+                raise MemoryError(
+                    f"系统可用提交内存仅{available_gb:.1f} GB，"
+                    "不足以启动全分辨率nnU-Net CPU推理"
+                )
 
         configure_nnunet_environment(self.config.nnunet_root)
         folds = normalize_folds(self.config.folds)
@@ -162,7 +221,21 @@ class NNUNetInferenceService:
             export_processes=export_processes,
             disable_tta=self.config.disable_tta,
         )
-        run_command(command)
+        last_reported_percent = 30
+
+        def report_nnunet_output(line: str) -> None:
+            nonlocal last_reported_percent
+            update = _parse_nnunet_progress_line(line)
+            if update is None:
+                return
+            percent, message = update
+            if percent <= last_reported_percent:
+                return
+            last_reported_percent = percent
+            if progress is not None:
+                progress("inference", percent, message)
+
+        run_command(command, output_callback=report_nnunet_output)
         if not internal_mask.is_file():
             raise SegmentationSetupError(
                 f"nnU-Net未生成预期mask：{internal_mask.name}"
@@ -172,6 +245,20 @@ class NNUNetInferenceService:
             restored_mask,
             output_label_profile=self.config.output_label_profile,
         )
+
+
+def _parse_nnunet_progress_line(line: str) -> tuple[int, str] | None:
+    match = NNUNET_PROGRESS_PATTERN.search(line)
+    if match is None:
+        return None
+    raw_percent = min(int(match.group("percent")), 100)
+    current = int(match.group("current"))
+    total = int(match.group("total"))
+    if line.startswith(NNUNET_COLLECTION_PREFIX):
+        percent = 82 + round(raw_percent * 0.02)
+        return percent, f"正在汇总分割结果：{current}/{total}"
+    percent = 30 + round(raw_percent * 0.52)
+    return percent, f"nnU-Net分割中：{current}/{total}（{raw_percent}%）"
 
 
 class MRIAnalysisPipeline:
@@ -190,7 +277,7 @@ class MRIAnalysisPipeline:
     def analyze(
         self,
         case_id: str,
-        progress: Callable[[str, int, str], None] | None = None,
+        progress: AnalysisProgressCallback | None = None,
     ) -> AnalysisResult:
         report_progress = progress or (lambda _stage, _percent, _message: None)
         with self.repository.case_lock(case_id):
@@ -229,6 +316,7 @@ class MRIAnalysisPipeline:
                     input_dir=processed_dir,
                     output_root=paths.inference_root,
                     case_id=paths.case_id,
+                    progress=report_progress,
                 )
                 report_progress("measurement", 85, "正在计算WT、TC和ET定量指标")
                 measurement: TumorMeasurement = measure_tumor(
@@ -239,6 +327,7 @@ class MRIAnalysisPipeline:
                 report_progress("saving", 95, "正在保存分析结果")
                 self.repository.save_features(case_id, metrics)
             except (
+                MemoryError,
                 OSError,
                 ValueError,
                 RuntimeError,
@@ -249,11 +338,10 @@ class MRIAnalysisPipeline:
                     "analysis_failed",
                     extra={"failure_type": type(exc).__name__},
                 )
-                if isinstance(exc, subprocess.CalledProcessError) and exc.returncode in {
-                    1,
-                    3221225477,
-                    -1073741819,
-                }:
+                if isinstance(exc, MemoryError) or (
+                    isinstance(exc, subprocess.CalledProcessError)
+                    and exc.returncode in {1, 3221225477, -1073741819}
+                ):
                     message = (
                         "nnU-Net推理失败：系统可用内存不足。已启用CPU低内存模式，"
                         "请关闭占用内存较大的程序后重试"

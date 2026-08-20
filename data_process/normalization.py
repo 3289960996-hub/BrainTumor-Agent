@@ -1,9 +1,8 @@
-"""基于MONAI的MRI强度归一化。"""
+"""低内存MRI强度归一化。"""
 
 from dataclasses import dataclass
 
 import numpy as np
-from monai.transforms import NormalizeIntensity
 from numpy.typing import NDArray
 
 from data_process.constants import REQUIRED_MODALITIES
@@ -39,33 +38,36 @@ def normalize_multimodal(
         raise NormalizationError(
             f"归一化输入必须包含4个模态通道，实际通道数={data.shape[0]}"
         )
-    if not np.isfinite(data).all():
-        raise NormalizationError("归一化输入包含NaN或Inf")
-
-    # 全零模态通常意味着文件错误或上传错误，应在进入模型前明确拒绝。
-    empty_channels = [
-        REQUIRED_MODALITIES[index].value
-        for index, channel in enumerate(data)
-        if not np.any(channel != 0)
-    ]
+    empty_channels: list[str] = []
+    for index, channel in enumerate(data):
+        if not np.isfinite(channel).all():
+            raise NormalizationError("归一化输入包含NaN或Inf")
+        if not np.any(channel != 0):
+            empty_channels.append(REQUIRED_MODALITIES[index].value)
     if empty_channels:
         raise NormalizationError(f"模态数据全为0：{', '.join(empty_channels)}")
 
-    transform = NormalizeIntensity(
-        nonzero=resolved_config.nonzero,
-        channel_wise=resolved_config.channel_wise,
-        dtype=np.float32,
-    )
-    try:
-        normalized = transform(data)
-    except Exception as exc:
-        raise NormalizationError("MONAI强度归一化失败") from exc
-
-    # MONAI可能返回MetaTensor；显式转为CPU NumPy，便于NIfTI保存。
-    if hasattr(normalized, "detach"):
-        normalized = normalized.detach().cpu().numpy()
-    result = np.asarray(normalized, dtype=np.float32)
-
-    if not np.isfinite(result).all():
-        raise NormalizationError("归一化结果包含NaN或Inf")
+    result = np.zeros_like(data, dtype=np.float32)
+    if resolved_config.channel_wise:
+        for source, target in zip(data, result, strict=True):
+            _normalize_array(source, target, nonzero=resolved_config.nonzero)
+    else:
+        _normalize_array(data, result, nonzero=resolved_config.nonzero)
     return result
+
+
+def _normalize_array(
+    source: NDArray[np.float32],
+    target: NDArray[np.float32],
+    *,
+    nonzero: bool,
+) -> None:
+    mask = source != 0 if nonzero else np.ones(source.shape, dtype=np.bool_)
+    mean = np.mean(source, where=mask, dtype=np.float32)
+    std = np.std(source, where=mask, dtype=np.float32)
+    if not np.isfinite(mean) or not np.isfinite(std):
+        raise NormalizationError("归一化统计量包含NaN或Inf")
+    if std == 0:
+        std = np.float32(1.0)
+    np.subtract(source, mean, out=target, where=mask)
+    np.divide(target, std, out=target, where=mask)

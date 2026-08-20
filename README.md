@@ -20,9 +20,10 @@
 
 ## 项目结构
 
-- `data_process/`：BraTS四模态发现、NIfTI读取、几何检查、MONAI归一化和processed数据保存。
+- `data_process/`：BraTS四模态发现、NIfTI读取、几何检查、低内存归一化和processed数据保存。
 - `segmentation/`：nnU-Net推理服务接口与结果契约。
 - `feature_extract/`：体积、位置、形态等确定性特征接口。
+- `longitudinal/`：多时相病例定量变化、检查间隔和对比结果持久化。
 - `rag/`：医学知识入库、FAISS索引和检索接口。
 - `agent/`：LangGraph状态、工具白名单和工作流入口。
 - `backend/`：FastAPI应用、API路由和后端测试。
@@ -63,7 +64,7 @@
 
 ## 一键启动（推荐）
 
-首次使用需安装并启动Docker Desktop。此后在项目根目录运行：
+在项目根目录运行：
 
 1. 启动全部服务：`.\scripts\start_all.ps1`
 2. 停止全部服务：`.\scripts\stop_all.ps1`
@@ -71,10 +72,10 @@
 Windows日常使用无需输入命令：打开项目根目录的`启停/`文件夹，双击`一键启动.cmd`
 或`一键停止.cmd`即可。`scripts/`中的PowerShell文件是内部实现，不需要逐个运行。
 
-启动脚本会自动启动Redis容器、FastAPI、单并发Celery Worker和前端，等待健康检查
-通过后打开浏览器。日志与进程状态保存在系统临时目录的`BrainTumor-Agent/`中，重复
-运行不会重复启动服务。如果系统
-已经安装`redis-server`，脚本也可以直接使用它，无需Docker。
+启动脚本优先使用本机`redis-server`或Memurai，随后启动FastAPI、单并发Celery Worker
+和前端，等待健康检查通过后打开浏览器。日志与进程状态保存在系统临时目录的
+`BrainTumor-Agent/`中，重复运行不会重复启动服务。只有找不到本机Redis兼容服务端时，
+脚本才会回退到Docker Redis。也可通过`BTA_REDIS_SERVER`指定服务端可执行文件的完整路径。
 
 ## 启动后端
 
@@ -102,6 +103,9 @@ MRI分析使用Redis和单并发Celery Worker。启动Redis后另开终端运行
 - `POST /api/v1/analyze`
 - `GET /api/v1/analysis-tasks/{task_id}`
 - `POST /api/v1/analysis-tasks/{task_id}/cancel`
+- `GET /api/v1/cases?analyzed_only=true`
+- `POST /api/v1/comparisons`
+- `GET /api/v1/comparisons/{comparison_id}`
 - `POST /api/v1/report`
 - `POST /api/v1/chat`
 
@@ -180,6 +184,22 @@ Notebook支持Drive持久化、断点续训、验证和模型导出，并明确�
 `report/generator.py`读取MRI分析JSON，通过Qwen-plus生成影像表现总结和建议关注指标，
 再由本地安全模板组装五章节Markdown报告。数值章节不会交给模型改写，输出禁止直接
 疾病确诊，并强制标记需要影像科医师审核。配置和运行命令见`report/README.md`。
+
+## 多时相MRI定量对比
+
+随访对比页面可从已完成分析的病例中选择基线和随访检查，按检查日期计算间隔，并对
+WT、TC、ET、水肿体积、三维最大径及区域占比进行确定性比较。物理量返回绝对变化和
+相对变化率，比例指标返回百分点变化；基线为零时不会生成无意义的百分比。结果持久化
+在`runtime/data/comparisons/`，不调用Qwen参与数值计算。
+
+空间对比使用基线T1ce作为固定影像、随访T1ce作为移动影像执行SimpleITK刚性配准，
+并以最近邻插值把随访BraTS Mask重采样到基线空间。系统分别生成WT、TC、ET的新增、
+持续和消退Mask，展示同步切片及确定性变化体积。相关性、前景脑区重叠和变换幅度共同
+构成质量门控；质控失败时保留定量表格，但不展示空间变化结论。
+
+前端通过Celery异步执行空间对比，显示影像读取、刚性配准、Mask重采样、变化计算、
+配准质控和结果保存进度。任务支持取消、失败重试和刷新页面后恢复，状态持久化在
+`runtime/data/comparison_tasks/`。空间结果仍不构成疾病进展或疗效判断。
 
 ## 医学影像知识库RAG
 

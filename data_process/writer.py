@@ -84,7 +84,7 @@ def save_processed_study(
         "direction": list(geometry.direction),
         "affine": geometry.affine.tolist(),
         "normalization": {
-            "method": "monai.NormalizeIntensity",
+            "method": "numpy.channel_wise_zscore",
             "nonzero": normalization_config.nonzero,
             "channel_wise": normalization_config.channel_wise,
             "dtype": "float32",

@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import nibabel as nib
@@ -25,6 +26,19 @@ from segmentation.prepare_dataset import (
     run_command,
 )
 from segmentation.train import build_train_command, normalize_folds
+
+
+def test_run_command_streams_carriage_return_progress() -> None:
+    lines: list[str] = []
+    script = (
+        "import sys; "
+        "sys.stdout.write('12%| 1/8\\r100%| 8/8\\r'); "
+        "sys.stdout.flush()"
+    )
+
+    run_command([sys.executable, "-c", script], output_callback=lines.append)
+
+    assert lines == ["12%| 1/8", "100%| 8/8"]
 
 
 def _write_brats_case(
