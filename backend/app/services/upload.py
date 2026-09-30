@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -29,12 +30,20 @@ class MRIUploadService:
         repository: CaseRepository,
         *,
         max_file_bytes: int,
+        max_total_bytes: int | None = None,
+        max_voxels: int = 300_000_000,
         chunk_size: int = 8 * 1024 * 1024,
     ) -> None:
         if max_file_bytes < 1 or chunk_size < 1:
             raise ValueError("上传大小和分块大小必须大于0")
+        if max_total_bytes is not None and max_total_bytes < max_file_bytes:
+            raise ValueError("四模态合计上限不能小于单文件上限")
+        if max_voxels < 1:
+            raise ValueError("体素上限必须大于0")
         self.repository = repository
         self.max_file_bytes = max_file_bytes
+        self.max_total_bytes = max_total_bytes
+        self.max_voxels = max_voxels
         self.chunk_size = chunk_size
 
     async def upload_case(
@@ -58,13 +67,20 @@ class MRIUploadService:
         paths = self.repository.create_case(case_id, owner_id=owner_id)
         saved: dict[str, str] = {}
         sizes: dict[str, int] = {}
+        total_bytes = 0
         try:
             for modality in MRIModality:
                 upload = uploads[modality]
                 suffix = _nifti_suffix(upload.filename)
                 target = paths.raw / f"{paths.case_id}_{modality.value}{suffix}"
-                sizes[modality.value] = await self._save_file(upload, target)
-                _validate_nifti_header(target)
+                size = await self._save_file(upload, target)
+                total_bytes += size
+                if self.max_total_bytes is not None and total_bytes > self.max_total_bytes:
+                    raise InvalidUploadError(
+                        f"四个模态合计不能超过{self.max_total_bytes}字节"
+                    )
+                sizes[modality.value] = size
+                _validate_nifti_header(target, self.max_voxels)
                 saved[modality.value] = target.name
             self.repository.write_status(
                 paths.case_id,
@@ -127,10 +143,17 @@ def _infer_modality_from_filename(filename: str | None) -> MRIModality | None:
     return None
 
 
-def _validate_nifti_header(path: Path) -> None:
+def _validate_nifti_header(path: Path, max_voxels: int) -> None:
     try:
         image = nib.load(str(path))
     except Exception as exc:
         raise InvalidUploadError(f"无法读取NIfTI头信息：{path.name}") from exc
-    if len(image.shape) != 3 or any(int(length) < 1 for length in image.shape):
+    shape = tuple(int(length) for length in image.shape)
+    if len(shape) != 3 or any(length < 1 for length in shape):
         raise InvalidUploadError(f"MRI必须是非空三维NIfTI：{path.name}")
+    voxels = math.prod(shape)
+    if voxels > max_voxels:
+        raise InvalidUploadError(
+            f"{path.name}声明的体素数{voxels}超过上限{max_voxels}，"
+            "请确认文件未压缩膨胀"
+        )

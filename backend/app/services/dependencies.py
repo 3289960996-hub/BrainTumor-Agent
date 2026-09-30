@@ -36,7 +36,10 @@ def get_case_repository() -> CaseRepository:
 @lru_cache
 def get_analysis_task_repository() -> AnalysisTaskRepository:
     settings = get_settings()
-    return AnalysisTaskRepository(settings.data_root)
+    return AnalysisTaskRepository(
+        settings.data_root,
+        max_active_tasks=settings.max_active_tasks,
+    )
 
 
 @lru_cache
@@ -48,7 +51,10 @@ def get_comparison_repository() -> ComparisonRepository:
 @lru_cache
 def get_comparison_task_repository() -> ComparisonTaskRepository:
     settings = get_settings()
-    return ComparisonTaskRepository(settings.data_root)
+    return ComparisonTaskRepository(
+        settings.data_root,
+        max_active_tasks=settings.max_active_tasks,
+    )
 
 
 @lru_cache
@@ -65,6 +71,8 @@ def get_upload_service() -> MRIUploadService:
     return MRIUploadService(
         get_case_repository(),
         max_file_bytes=settings.max_upload_size_mb * 1024 * 1024,
+        max_total_bytes=settings.max_upload_total_mb * 1024 * 1024,
+        max_voxels=settings.max_nifti_voxels,
     )
 
 

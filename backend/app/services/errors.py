@@ -98,3 +98,12 @@ class AuthenticationError(BackendServiceError):
 class AuthorizationError(BackendServiceError):
     def __init__(self, message: str = "无权访问该资源") -> None:
         super().__init__(message, code="forbidden", status_code=403)
+
+
+class TaskQueueSaturatedError(BackendServiceError):
+    def __init__(self, active: int, limit: int) -> None:
+        super().__init__(
+            f"活动任务已达上限（{active}/{limit}），请等待当前任务结束后再提交",
+            code="task_queue_saturated",
+            status_code=429,
+        )

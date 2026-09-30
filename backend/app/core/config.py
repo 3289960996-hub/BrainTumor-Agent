@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     model_root: Path = Path("./runtime/models")
     faiss_index_path: Path = Path("./runtime/faiss")
     max_upload_size_mb: int = Field(default=1024, ge=1, le=4096)
+    # 四个模态合计上限：单文件上限乘以模态数会放大磁盘耗尽风险。
+    max_upload_total_mb: int = Field(default=2048, ge=1, le=16384)
+    # NIfTI头声明的体素数上限：极小文件可以声明巨大的解压后体积。
+    max_nifti_voxels: int = Field(default=300_000_000, ge=1_000_000)
+    # 每个队列同时允许的活动任务数，超出返回429。
+    max_active_tasks: int = Field(default=2, ge=1, le=64)
 
     database_url: str = "sqlite:///./runtime/brain_tumor_agent.db"
     redis_url: str = "redis://127.0.0.1:6379/0"

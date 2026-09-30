@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent.assistant import AssistantResponse
+from backend.app.api.routes import imaging as imaging_routes
 from backend.app.main import app
 from backend.app.services.analysis import (
     ANALYSIS_CACHE_VERSION,
@@ -31,7 +32,7 @@ from backend.app.services.dependencies import (
     get_report_service,
     get_upload_service,
 )
-from backend.app.services.errors import CaseNotFoundError
+from backend.app.services.errors import CaseNotFoundError, TaskQueueSaturatedError
 from backend.app.services.reporting import (
     MedicalReportEditingService,
     MedicalReportService,
@@ -642,3 +643,93 @@ def test_service_error_is_returned_as_stable_json() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "case_not_found"
+
+
+def test_upload_rejects_total_size_over_limit_and_cleans_case(tmp_path: Path) -> None:
+    """四个模态合计超限时按400拒绝，并删除半成品病例目录。"""
+
+    repository = CaseRepository(tmp_path / "data")
+    files = _multipart_modalities(tmp_path)
+    single = len(files["t1"][1])
+    service = MRIUploadService(
+        repository,
+        max_file_bytes=single + 1,
+        max_total_bytes=single * 2 + 1,
+    )
+    app.dependency_overrides[get_upload_service] = lambda: service
+
+    response = TestClient(app).post(
+        "/api/v1/upload",
+        data={"case_id": "case-too-large"},
+        files=files,
+    )
+
+    assert response.status_code == 400
+    assert "合计" in response.json()["detail"]["message"]
+    assert not (tmp_path / "data" / "cases" / "case-too-large").exists()
+
+
+def test_upload_rejects_nifti_header_over_voxel_limit(tmp_path: Path) -> None:
+    """按NIfTI头声明的体素数拦截压缩膨胀文件。"""
+
+    repository = CaseRepository(tmp_path / "data")
+    service = MRIUploadService(
+        repository,
+        max_file_bytes=10 * 1024 * 1024,
+        max_voxels=100,
+    )
+    app.dependency_overrides[get_upload_service] = lambda: service
+
+    response = TestClient(app).post(
+        "/api/v1/upload",
+        data={"case_id": "case-voxel-bomb"},
+        files=_multipart_modalities(tmp_path),
+    )
+
+    assert response.status_code == 400
+    assert "体素" in response.json()["detail"]["message"]
+    assert not (tmp_path / "data" / "cases" / "case-voxel-bomb").exists()
+
+
+def test_analysis_task_repository_enforces_active_limit(tmp_path: Path) -> None:
+    """活动任务达到上限后拒绝新任务，但同一病例的重复提交保持幂等。"""
+
+    repository = CaseRepository(tmp_path / "data")
+    tasks = AnalysisTaskRepository(tmp_path / "data", max_active_tasks=1)
+    repository.create_case("case-one")
+    repository.create_case("case-two")
+
+    first, created = tasks.create("case-one")
+    assert created is True
+    assert tasks.count_active() == 1
+
+    with pytest.raises(TaskQueueSaturatedError):
+        tasks.create("case-two")
+
+    repeated, created_again = tasks.create("case-one")
+    assert created_again is False
+    assert repeated["task_id"] == first["task_id"]
+
+
+def test_analyze_returns_429_when_queue_is_saturated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """队列打满时接口以429拒绝，而不是继续堆积任务。"""
+
+    repository = CaseRepository(tmp_path / "data")
+    repository.create_case("case-one")
+    repository.create_case("case-two")
+    tasks = AnalysisTaskRepository(tmp_path / "data", max_active_tasks=1)
+    tasks.create("case-one")
+    app.dependency_overrides[get_case_repository] = lambda: repository
+    app.dependency_overrides[get_analysis_task_repository] = lambda: tasks
+    monkeypatch.setattr(imaging_routes, "_analysis_worker_available", lambda: True)
+
+    response = TestClient(app).post(
+        "/api/v1/analyze",
+        json={"case_id": "case-two"},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "task_queue_saturated"

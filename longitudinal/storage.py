@@ -17,6 +17,7 @@ from backend.app.services.errors import (
     ComparisonNotFoundError,
     ComparisonTaskNotFoundError,
     InvalidUploadError,
+    TaskQueueSaturatedError,
 )
 
 COMPARISON_ID_PATTERN = re.compile(r"comparison-[a-f0-9]{20}")
@@ -105,8 +106,14 @@ class ComparisonTaskRepository:
 
     ACTIVE_STATUSES = {"queued", "running", "cancel_requested"}
 
-    def __init__(self, data_root: str | Path) -> None:
+    def __init__(
+        self,
+        data_root: str | Path,
+        *,
+        max_active_tasks: int | None = None,
+    ) -> None:
         self.root = Path(data_root).expanduser().resolve() / "comparison_tasks"
+        self.max_active_tasks = max_active_tasks
         self._lock = threading.Lock()
 
     def _path(self, task_id: str) -> Path:
@@ -144,6 +151,10 @@ class ComparisonTaskRepository:
             active = self.find_active(comparison_id, locked=True)
             if active is not None:
                 return active, False
+            if self.max_active_tasks is not None:
+                queued = self.count_active(locked=True)
+                if queued >= self.max_active_tasks:
+                    raise TaskQueueSaturatedError(queued, self.max_active_tasks)
             self._write(payload)
         return payload, True
 
@@ -193,6 +204,21 @@ class ComparisonTaskRepository:
             return find()
         with self._lock:
             return find()
+
+    def count_active(self, *, locked: bool = False) -> int:
+        """返回当前处于活动状态的空间对比任务数。"""
+
+        def count() -> int:
+            return sum(
+                1
+                for payload in self._all()
+                if payload.get("status") in self.ACTIVE_STATUSES
+            )
+
+        if locked:
+            return count()
+        with self._lock:
+            return count()
 
     def _all(self) -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []
