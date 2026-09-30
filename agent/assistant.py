@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import uuid
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -20,6 +19,7 @@ from agent.tools import (
     ReportGeneratorTool,
 )
 from agent.workflow import build_workflow
+from rag.embedding import BGEEmbeddingConfig
 from rag.retriever import MedicalKnowledgeRetriever
 from report.generator import QwenReportGenerator, ReportConfig
 
@@ -83,16 +83,20 @@ class BrainTumorMRIAssistant:
 def create_default_assistant(
     rag_index_path: str | Path | None = None,
     model: QwenAgentClient | None = None,
+    embedding_config: BGEEmbeddingConfig | None = None,
 ) -> BrainTumorMRIAssistant:
-    """根据环境变量创建共享Qwen客户端和三个默认工具。"""
+    """根据应用配置创建共享Qwen客户端和三个默认工具。"""
 
+    from backend.app.core.config import get_settings
+
+    settings = get_settings()
     resolved_model = model or QwenAgentClient()
     report_config = ReportConfig(
         api_key=resolved_model.config.api_key,
         base_url=resolved_model.config.base_url,
         model=resolved_model.config.model,
-        temperature=float(os.getenv("BTA_REPORT_TEMPERATURE", "0.2")),
-        max_tokens=int(os.getenv("BTA_REPORT_MAX_TOKENS", "800")),
+        temperature=settings.report_temperature,
+        max_tokens=settings.report_max_tokens,
         timeout_seconds=resolved_model.config.timeout_seconds,
         enable_data_inspection=resolved_model.config.enable_data_inspection,
     )
@@ -100,14 +104,16 @@ def create_default_assistant(
         config=report_config,
         client=resolved_model.client,
     )
-    index_path = rag_index_path or os.getenv(
-        "BTA_FAISS_INDEX_PATH",
-        "./runtime/faiss",
-    )
+    index_path = rag_index_path or settings.faiss_index_path
     tools = AgentTools(
         mri_analyzer=MRIAnalyzerTool(),
         report_generator=ReportGeneratorTool(report_generator),
-        medical_rag=MedicalRAGTool(MedicalKnowledgeRetriever(index_path)),
+        medical_rag=MedicalRAGTool(
+            MedicalKnowledgeRetriever(
+                index_path,
+                embedding_config=embedding_config or BGEEmbeddingConfig.from_env(),
+            )
+        ),
     )
     return BrainTumorMRIAssistant(tools=tools, model=resolved_model)
 
@@ -135,8 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--case-id", default=None, help="可选去标识化病例编号")
     parser.add_argument(
         "--rag-index",
-        default=os.getenv("BTA_FAISS_INDEX_PATH", "./runtime/faiss"),
-        help="医学知识FAISS索引目录",
+        default=None,
+        help="医学知识FAISS索引目录；缺省使用配置中的BTA_FAISS_INDEX_PATH",
     )
     parser.add_argument("--json", action="store_true", help="输出标准JSON")
     return parser

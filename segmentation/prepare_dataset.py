@@ -97,9 +97,11 @@ class PreparedDataset:
 
 
 def default_nnunet_root() -> Path:
-    """返回命令行默认nnU-Net根目录。"""
+    """返回命令行默认nnU-Net根目录，取自应用配置（环境变量或.env）。"""
 
-    return Path(os.environ.get("NNUNET_ROOT", "./runtime/nnunet"))
+    from backend.app.core.config import get_settings
+
+    return Path(get_settings().nnunet_root)
 
 
 def configure_nnunet_environment(root: str | Path) -> NnUNetPaths:

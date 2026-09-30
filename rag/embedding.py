@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,15 +30,20 @@ class BGEEmbeddingConfig:
 
     @classmethod
     def from_env(cls) -> BGEEmbeddingConfig:
-        """从环境变量读取Embedding设置。"""
+        """从应用配置（环境变量或项目根目录的.env）读取Embedding设置。"""
 
-        cache_value = os.getenv("BTA_EMBEDDING_CACHE_DIR", "").strip()
+        from backend.app.core.config import get_settings
+
+        settings = get_settings()
+        cache_value = (
+            str(settings.embedding_cache_dir) if settings.embedding_cache_dir else ""
+        ).strip()
         return cls(
-            model_name=os.getenv("BTA_EMBEDDING_MODEL", DEFAULT_BGE_MODEL).strip(),
-            device=os.getenv("BTA_EMBEDDING_DEVICE", "auto").strip(),
-            batch_size=int(os.getenv("BTA_EMBEDDING_BATCH_SIZE", "16")),
+            model_name=str(settings.embedding_model).strip() or DEFAULT_BGE_MODEL,
+            device=str(settings.embedding_device).strip(),
+            batch_size=int(settings.embedding_batch_size),
             cache_dir=Path(cache_value).expanduser().resolve() if cache_value else None,
-            local_files_only=_env_bool("BTA_EMBEDDING_LOCAL_FILES_ONLY", False),
+            local_files_only=bool(settings.embedding_local_files_only),
         )
 
     def validate(self) -> None:
@@ -116,17 +120,3 @@ def _default_factory() -> EmbeddingFactory:
             "缺少langchain-huggingface，请先安装requirements.txt"
         ) from exc
     return HuggingFaceEmbeddings
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    """解析常见布尔环境变量。"""
-
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise EmbeddingSetupError(f"{name}必须是布尔值")

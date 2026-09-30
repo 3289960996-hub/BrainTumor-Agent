@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     data_root: Path = Path("./runtime/data")
     model_root: Path = Path("./runtime/models")
     faiss_index_path: Path = Path("./runtime/faiss")
+    # 本地医学RAG embedding：只在这里定义一次，rag/embedding.py 通过Settings读取，
+    # 因此写在.env里的值（而不是仅导出到shell的变量）也会生效。
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
+    embedding_batch_size: int = Field(default=16, ge=1, le=512)
+    embedding_cache_dir: Path | None = None
+    embedding_local_files_only: bool = False
     max_upload_size_mb: int = Field(default=1024, ge=1, le=4096)
     # 四个模态合计上限：单文件上限乘以模态数会放大磁盘耗尽风险。
     max_upload_total_mb: int = Field(default=2048, ge=1, le=16384)
@@ -43,7 +50,6 @@ class Settings(BaseSettings):
     # 每个队列同时允许的活动任务数，超出返回429。
     max_active_tasks: int = Field(default=2, ge=1, le=64)
 
-    database_url: str = "sqlite:///./runtime/brain_tumor_agent.db"
     redis_url: str = "redis://127.0.0.1:6379/0"
     celery_task_always_eager: bool = False
     analysis_task_max_retries: int = Field(default=1, ge=0, le=5)
@@ -51,7 +57,7 @@ class Settings(BaseSettings):
 
     nnunet_root: Path = Field(
         default=Path("./runtime/nnunet"),
-        validation_alias="NNUNET_ROOT",
+        validation_alias=AliasChoices("BTA_NNUNET_ROOT", "NNUNET_ROOT"),
     )
     nnunet_dataset_id: int = Field(default=137, ge=1, le=999)
     nnunet_configuration: str = "3d_fullres"

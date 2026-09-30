@@ -20,7 +20,8 @@ def configure_logging(config_path: str | Path | None = None) -> None:
         logging.basicConfig(level=logging.INFO)
         return
 
-    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    # utf-8-sig：用记事本等编辑器保存的配置文件可能带BOM，不能让它变成解析错误。
+    config = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
     handlers = config.get("handlers")
     if isinstance(handlers, dict):
         for handler in handlers.values():

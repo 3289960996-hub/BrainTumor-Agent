@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -64,20 +63,20 @@ class ReportConfig:
 
     @classmethod
     def from_env(cls) -> ReportConfig:
-        """从环境变量读取配置，不在代码或日志中暴露API Key。"""
+        """从应用配置读取配置，不在代码或日志中暴露API Key。"""
 
+        from backend.app.core.config import get_settings
+
+        settings = get_settings()
+        secret = settings.dashscope_api_key
         return cls(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "").strip(),
-            base_url=os.getenv("BTA_QWEN_BASE_URL", DEFAULT_QWEN_BASE_URL).strip(),
-            model=os.getenv("BTA_QWEN_MODEL", "qwen-plus").strip(),
-            temperature=float(os.getenv("BTA_REPORT_TEMPERATURE", "0.2")),
-            max_tokens=int(os.getenv("BTA_REPORT_MAX_TOKENS", "800")),
-            timeout_seconds=float(os.getenv("BTA_QWEN_TIMEOUT_SECONDS", "60")),
-            enable_data_inspection=os.getenv(
-                "BTA_QWEN_ENABLE_DATA_INSPECTION",
-                "false",
-            ).strip().lower()
-            in {"1", "true", "yes", "on"},
+            api_key=secret.get_secret_value().strip() if secret is not None else "",
+            base_url=settings.qwen_base_url.strip(),
+            model=settings.qwen_model.strip(),
+            temperature=settings.report_temperature,
+            max_tokens=settings.report_max_tokens,
+            timeout_seconds=settings.qwen_timeout_seconds,
+            enable_data_inspection=settings.qwen_enable_data_inspection,
         )
 
 
