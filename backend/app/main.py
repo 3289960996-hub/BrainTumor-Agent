@@ -20,6 +20,11 @@ app = FastAPI(
     version=settings.app_version,
     debug=settings.debug,
     description="Backend API for multimodal MRI brain tumor assisted analysis.",
+    # production 环境默认关闭接口文档与 schema，减少不必要的公开面；
+    # 可用 BTA_EXPOSE_API_DOCS 显式覆盖（见 Settings.api_docs_enabled）。
+    docs_url="/docs" if settings.api_docs_enabled else None,
+    redoc_url="/redoc" if settings.api_docs_enabled else None,
+    openapi_url="/openapi.json" if settings.api_docs_enabled else None,
 )
 
 app.add_middleware(

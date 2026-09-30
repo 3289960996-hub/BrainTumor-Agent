@@ -7,8 +7,10 @@ from typing import Any
 
 import pytest
 import yaml
+from fastapi.testclient import TestClient
 
 from backend.app.core.config import Settings, get_settings
+from backend.app.main import app
 from rag.embedding import BGEEmbeddingConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -124,3 +126,24 @@ def test_nnunet_root_accepts_both_variable_names(
         get_settings.cache_clear()
 
     assert resolved == expected
+
+
+def test_api_docs_follow_environment_and_override() -> None:
+    """production环境默认关闭接口文档；显式开关优先于环境推断。"""
+
+    assert Settings(environment="production").api_docs_enabled is False
+    assert Settings(environment="prod").api_docs_enabled is False
+    assert Settings(environment="development").api_docs_enabled is True
+    assert Settings(environment="production", expose_api_docs=True).api_docs_enabled is True
+    assert Settings(environment="development", expose_api_docs=False).api_docs_enabled is False
+
+
+def test_app_wires_docs_flag_and_serves_schema_in_development() -> None:
+    """应用实例必须按配置挂载或关闭文档路由。"""
+
+    enabled = get_settings().api_docs_enabled
+    assert app.docs_url == ("/docs" if enabled else None)
+    assert app.openapi_url == ("/openapi.json" if enabled else None)
+
+    client = TestClient(app)
+    assert client.get("/openapi.json").status_code == (200 if enabled else 404)

@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: str = "development"
     debug: bool = False
+    # 接口文档开关：留空(null)时按 environment 推断（production 关闭）；显式设置以此为准。
+    expose_api_docs: bool | None = None
     api_prefix: str = "/api/v1"
     cors_origins: list[str] = [
         "http://localhost:5173",
@@ -89,6 +91,14 @@ class Settings(BaseSettings):
         validation_alias="DASHSCOPE_API_KEY",
     )
     api_key: SecretStr | None = None
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        """是否暴露 /docs、/redoc 与 /openapi.json。"""
+
+        if self.expose_api_docs is not None:
+            return self.expose_api_docs
+        return self.environment.strip().lower() not in {"production", "prod"}
 
 
 @lru_cache
