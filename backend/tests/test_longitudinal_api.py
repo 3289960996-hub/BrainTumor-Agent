@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import date
 from pathlib import Path
@@ -328,6 +329,40 @@ def test_submits_polls_and_cancels_comparison_task(
     )
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
+
+
+def test_comparison_task_without_request_payload_returns_404(tmp_path: Path) -> None:
+    """任务记录缺request字段时应按404处理，不能变成KeyError导致的500。"""
+
+    _repository, service = _services(tmp_path)
+    tasks = ComparisonTaskRepository(tmp_path / "data")
+    task_id = "comparison-task-6f1e2d3c4b5a69788796a5b4c3d2e1f0"
+    target = tmp_path / "data" / "comparison_tasks" / f"{task_id}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "comparison_id": "comparison-0123456789abcdef0123",
+                "status": "queued",
+                "stage": "queued",
+                "progress": 0,
+                "message": "",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    app.dependency_overrides[get_longitudinal_comparison_service] = lambda: service
+    app.dependency_overrides[get_comparison_task_repository] = lambda: tasks
+
+    polled = TestClient(app).get(f"/api/v1/comparison-tasks/{task_id}")
+    cancelled = TestClient(app).post(f"/api/v1/comparison-tasks/{task_id}/cancel")
+
+    assert polled.status_code == 404
+    assert cancelled.status_code == 404
 
 
 def test_comparison_worker_persists_progress_and_result(

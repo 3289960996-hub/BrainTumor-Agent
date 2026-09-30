@@ -15,7 +15,10 @@ from backend.app.services.dependencies import (
     get_comparison_task_repository,
     get_longitudinal_comparison_service,
 )
-from backend.app.services.errors import TaskQueueUnavailableError
+from backend.app.services.errors import (
+    ComparisonTaskNotFoundError,
+    TaskQueueUnavailableError,
+)
 from backend.app.services.security import authenticate_request, require_case_access
 from backend.app.tasks.celery_app import celery_app
 from longitudinal.service import (
@@ -33,6 +36,22 @@ def _worker_available() -> bool:
     except Exception:
         return False
     return bool(replies)
+
+
+def _require_task_case_access(
+    service: LongitudinalComparisonService,
+    task: dict,
+    request: Request,
+) -> None:
+    """校验任务所引用病例的访问权限；记录缺字段时按任务不存在处理。"""
+
+    task_request = task.get("request")
+    baseline = task_request.get("baseline_case_id") if isinstance(task_request, dict) else None
+    followup = task_request.get("followup_case_id") if isinstance(task_request, dict) else None
+    if not isinstance(baseline, str) or not isinstance(followup, str):
+        raise ComparisonTaskNotFoundError(str(task.get("task_id") or ""))
+    require_case_access(service.cases, baseline, request)
+    require_case_access(service.cases, followup, request)
 
 
 def _task_response(record: dict, request: Request) -> ComparisonTaskResponse:
@@ -143,10 +162,7 @@ def get_comparison_task(
     ],
 ) -> ComparisonTaskResponse:
     task = tasks.get(task_id)
-    task_request = task.get("request", {})
-    if isinstance(task_request, dict):
-        require_case_access(service.cases, str(task_request["baseline_case_id"]), request)
-        require_case_access(service.cases, str(task_request["followup_case_id"]), request)
+    _require_task_case_access(service, task, request)
     return _task_response(task, request)
 
 
@@ -168,10 +184,7 @@ def cancel_comparison_task(
     ],
 ) -> ComparisonTaskResponse:
     task = tasks.get(task_id)
-    task_request = task.get("request", {})
-    if isinstance(task_request, dict):
-        require_case_access(service.cases, str(task_request["baseline_case_id"]), request)
-        require_case_access(service.cases, str(task_request["followup_case_id"]), request)
+    _require_task_case_access(service, task, request)
     if task["status"] == "queued":
         task = tasks.update(
             task_id,
