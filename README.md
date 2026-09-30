@@ -255,6 +255,22 @@ CC BY 4.0授权的EANO成人弥漫性胶质瘤指南（2021），使用CPU轻量
   中的`BTA_API_KEY`）或生产反向代理负责在服务端注入`X-API-Key`请求头。
   不要把密钥写进任何`VITE_`前缀变量——那会被打包进浏览器代码，等于公开。
 
+## 运维
+
+- 上限配置：`BTA_MAX_UPLOAD_SIZE_MB`（单文件）、`BTA_MAX_UPLOAD_TOTAL_MB`
+  （四模态合计）、`BTA_MAX_NIFTI_VOXELS`（NIfTI头声明的体素数，用于拦截压缩
+  膨胀文件）、`BTA_MAX_ACTIVE_TASKS`（每个队列的活动任务数，超出返回`429`）。
+- 失败或取消的病例不会自动删除产物。需要回收磁盘时先演练、再执行：
+
+  `python scripts/cleanup_case_artifacts.py`（演练，只列出将删除的目录）
+  `python scripts/cleanup_case_artifacts.py --apply`（真正删除）
+
+  只删除`processed/`与`inference/`，保留`raw/`、`case.json`、`features.json`
+  和`report.md`，便于重新分析或人工排查。
+- 日志：业务日志`logs/brain_tumor_agent.log`，审计日志
+  `logs/brain_tumor_agent-audit.log`（各10MB轮转）。审计记录包含调用方标识、
+  方法、路径和状态码，不记录密钥。
+
 ## 许可证
 
 项目源代码采用[MIT License](LICENSE)。数据集、模型权重和医学资料分别遵循其原始
@@ -264,4 +280,5 @@ CC BY 4.0授权的EANO成人弥漫性胶质瘤指南（2021），使用CPU轻量
 
 1. 增加强制中断推理、任务优先级和运维监控。
 2. 扩充获授权指南并增加模型、数据和知识库版本审计。
-3. 增加权限控制、脱敏、审计日志和人工审核闭环。
+3. 增加多用户身份与病例隔离、数据脱敏和人工审核状态机（当前为单密钥认证、
+   病例归属校验和审计日志）。
