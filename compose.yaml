@@ -4,7 +4,9 @@ services:
     container_name: brain-tumor-agent-redis
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      # 只发布到本机：该Redis没有认证，暴露到局域网等于把Celery队列和任务状态交出去。
+      # 确需跨机访问时请自行加--requirepass，并在BTA_REDIS_URL中带上密码。
+      - "127.0.0.1:6379:6379"
     volumes:
       - brain-tumor-agent-redis:/data
     healthcheck:
