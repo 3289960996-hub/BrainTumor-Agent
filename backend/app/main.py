@@ -1,5 +1,7 @@
 """FastAPI application entry point."""
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -9,6 +11,7 @@ from backend.app.core.config import get_settings
 from backend.app.services.errors import BackendServiceError
 
 settings = get_settings()
+audit_logger = logging.getLogger("brain_tumor_agent.audit")
 
 app = FastAPI(
     title=settings.app_name,
@@ -24,6 +27,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def audit_requests(request: Request, call_next):
+    response = await call_next(request)
+    context = getattr(request.state, "auth", None)
+    principal = getattr(context, "principal", "anonymous")
+    audit_logger.info(
+        "event=api_request principal=%s method=%s path=%s status=%s",
+        principal,
+        request.method,
+        request.url.path,
+        response.status_code,
+    )
+    return response
 
 
 @app.exception_handler(BackendServiceError)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,36 @@ def _services(tmp_path: Path) -> tuple[CaseRepository, LongitudinalComparisonSer
     cases = CaseRepository(tmp_path / "data")
     comparisons = ComparisonRepository(tmp_path / "data")
     return cases, LongitudinalComparisonService(cases, comparisons)
+
+
+def test_comparison_task_write_retries_transient_windows_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tasks = ComparisonTaskRepository(tmp_path / "data")
+    task, _ = tasks.create(
+        comparison_id="comparison-0123456789abcdef0123",
+        request_payload={"patient_group_id": "subject-retry"},
+    )
+    real_replace = os.replace
+    attempts = 0
+
+    def flaky_replace(source: str | Path, target: str | Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError(13, "file is temporarily locked")
+        real_replace(source, target)
+
+    monkeypatch.setattr("longitudinal.storage.os.replace", flaky_replace)
+    monkeypatch.setattr("longitudinal.storage.time.sleep", lambda _: None)
+
+    updated = tasks.update(task["task_id"], status="running", progress=2)
+
+    assert attempts == 3
+    assert updated["status"] == "running"
+    assert tasks.get(task["task_id"])["progress"] == 2
+    assert not list(tasks.root.glob("*.tmp"))
 
 
 def _analyzed_case(

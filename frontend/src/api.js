@@ -4,6 +4,12 @@ const API_BASE = (
   import.meta.env?.VITE_API_BASE_URL || DEFAULT_API_BASE
 ).replace(/\/$/, "");
 
+const API_KEY = import.meta.env?.VITE_API_KEY || "";
+
+function protectedHeaders(headers = {}) {
+  return API_KEY ? { ...headers, "X-API-Key": API_KEY } : headers;
+}
+
 export class ApiError extends Error {
   constructor(message, status) {
     super(message);
@@ -14,7 +20,7 @@ export class ApiError extends Error {
 
 export async function checkHealth() {
   const response = await fetch(`${API_BASE}/health`, {
-    headers: { Accept: "application/json" },
+    headers: protectedHeaders({ Accept: "application/json" }),
   });
   return parseResponse(response);
 }
@@ -48,6 +54,7 @@ export async function uploadMRI(files, requestedCaseId = "") {
   const response = await fetch(`${API_BASE}/upload`, {
     method: "POST",
     body: form,
+    headers: protectedHeaders(),
   });
   return parseResponse(response);
 }
@@ -55,7 +62,7 @@ export async function uploadMRI(files, requestedCaseId = "") {
 export async function analyzeCase(caseId) {
   const response = await fetch(`${API_BASE}/analyze`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: protectedHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ case_id: caseId }),
   });
   return parseResponse(response);
@@ -64,7 +71,7 @@ export async function analyzeCase(caseId) {
 export async function getAnalysisTask(taskId) {
   const response = await fetch(
     `${API_BASE}/analysis-tasks/${encodeURIComponent(taskId)}`,
-    { headers: { Accept: "application/json" } },
+    { headers: protectedHeaders({ Accept: "application/json" }) },
   );
   return parseResponse(response);
 }
@@ -72,14 +79,14 @@ export async function getAnalysisTask(taskId) {
 export async function cancelAnalysisTask(taskId) {
   const response = await fetch(
     `${API_BASE}/analysis-tasks/${encodeURIComponent(taskId)}/cancel`,
-    { method: "POST", headers: { Accept: "application/json" } },
+    { method: "POST", headers: protectedHeaders({ Accept: "application/json" }) },
   );
   return parseResponse(response);
 }
 
 export async function getCase(caseId) {
   const response = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}`, {
-    headers: { Accept: "application/json" },
+    headers: protectedHeaders({ Accept: "application/json" }),
   });
   return parseResponse(response);
 }
@@ -87,7 +94,7 @@ export async function getCase(caseId) {
 export async function listCases(analyzedOnly = false) {
   const query = analyzedOnly ? "?analyzed_only=true" : "";
   const response = await fetch(`${API_BASE}/cases${query}`, {
-    headers: { Accept: "application/json" },
+    headers: protectedHeaders({ Accept: "application/json" }),
   });
   return parseResponse(response);
 }
@@ -95,7 +102,7 @@ export async function listCases(analyzedOnly = false) {
 export async function createComparison(payload) {
   const response = await fetch(`${API_BASE}/comparisons`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: protectedHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
   return parseResponse(response);
@@ -104,7 +111,7 @@ export async function createComparison(payload) {
 export async function getComparison(comparisonId) {
   const response = await fetch(
     `${API_BASE}/comparisons/${encodeURIComponent(comparisonId)}`,
-    { headers: { Accept: "application/json" } },
+    { headers: protectedHeaders({ Accept: "application/json" }) },
   );
   return parseResponse(response);
 }
@@ -112,7 +119,7 @@ export async function getComparison(comparisonId) {
 export async function startComparisonTask(payload) {
   const response = await fetch(`${API_BASE}/comparison-tasks`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: protectedHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
   return parseResponse(response);
@@ -121,7 +128,7 @@ export async function startComparisonTask(payload) {
 export async function getComparisonTask(taskId) {
   const response = await fetch(
     `${API_BASE}/comparison-tasks/${encodeURIComponent(taskId)}`,
-    { headers: { Accept: "application/json" } },
+    { headers: protectedHeaders({ Accept: "application/json" }) },
   );
   return parseResponse(response);
 }
@@ -129,7 +136,7 @@ export async function getComparisonTask(taskId) {
 export async function cancelComparisonTask(taskId) {
   const response = await fetch(
     `${API_BASE}/comparison-tasks/${encodeURIComponent(taskId)}/cancel`,
-    { method: "POST", headers: { Accept: "application/json" } },
+    { method: "POST", headers: protectedHeaders({ Accept: "application/json" }) },
   );
   return parseResponse(response);
 }
@@ -137,7 +144,7 @@ export async function cancelComparisonTask(taskId) {
 export async function generateReport(caseId) {
   const response = await fetch(`${API_BASE}/report`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: protectedHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ case_id: caseId }),
   });
   return parseResponse(response);
@@ -146,7 +153,7 @@ export async function generateReport(caseId) {
 export async function proposeReportEdit(caseId, instruction) {
   const response = await fetch(`${API_BASE}/report/edit`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: protectedHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ case_id: caseId, instruction: instruction.trim() }),
   });
   return parseResponse(response);
@@ -155,7 +162,7 @@ export async function proposeReportEdit(caseId, instruction) {
 export async function applyReportEdit(caseId, suggestionId) {
   const response = await fetch(`${API_BASE}/report/apply`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: protectedHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ case_id: caseId, suggestion_id: suggestionId }),
   });
   return parseResponse(response);
@@ -168,7 +175,7 @@ export async function askAgent(question, caseId = null) {
   }
   const response = await fetch(`${API_BASE}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: protectedHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
   return parseResponse(response);
@@ -177,7 +184,9 @@ export async function askAgent(question, caseId = null) {
 export async function downloadNifti(url) {
   const artifactUrl = new URL(url, window.location.origin);
   const sameOriginPath = `${artifactUrl.pathname}${artifactUrl.search}`;
-  const response = await fetch(sameOriginPath);
+  const response = await fetch(sameOriginPath, {
+    headers: protectedHeaders(),
+  });
   if (!response.ok) {
     throw new ApiError("无法下载分割mask", response.status);
   }

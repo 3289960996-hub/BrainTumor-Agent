@@ -88,3 +88,13 @@ class ExternalServiceError(BackendServiceError):
 class ServiceConfigurationError(BackendServiceError):
     def __init__(self, message: str) -> None:
         super().__init__(message, code="service_not_configured", status_code=503)
+
+
+class AuthenticationError(BackendServiceError):
+    def __init__(self, message: str = "需要有效的API Key") -> None:
+        super().__init__(message, code="authentication_required", status_code=401)
+
+
+class AuthorizationError(BackendServiceError):
+    def __init__(self, message: str = "无权访问该资源") -> None:
+        super().__init__(message, code="forbidden", status_code=403)

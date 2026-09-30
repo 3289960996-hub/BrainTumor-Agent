@@ -76,6 +76,7 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="DASHSCOPE_API_KEY",
     )
+    api_key: SecretStr | None = None
 
 
 @lru_cache

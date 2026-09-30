@@ -41,11 +41,17 @@ from backend.app.services.reporting import (
     MedicalReportService,
 )
 from backend.app.services.storage import AnalysisTaskRepository, CaseRepository
+from backend.app.services.security import (
+    audit_event,
+    authenticate_request,
+    principal_for,
+    require_case_access,
+)
 from backend.app.services.upload import MRIUploadService
 from backend.app.tasks.celery_app import celery_app
 from data_process.constants import MRIModality
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(authenticate_request)])
 
 
 def _restore_idle_case_status(repository: CaseRepository, case_id: str) -> None:
@@ -71,10 +77,16 @@ def _analysis_worker_available() -> bool:
     summary="列出去标识化病例摘要",
 )
 def list_cases(
+    request: Request,
     repository: Annotated[CaseRepository, Depends(get_case_repository)],
     analyzed_only: bool = False,
 ) -> CaseListResponse:
-    return CaseListResponse(cases=repository.list_cases(analyzed_only=analyzed_only))
+    return CaseListResponse(
+        cases=repository.list_cases(
+            analyzed_only=analyzed_only,
+            owner_id=principal_for(request),
+        )
+    )
 
 
 @router.post(
@@ -84,6 +96,7 @@ def list_cases(
     summary="上传BraTS四模态MRI",
 )
 async def upload_mri(
+    request: Request,
     service: Annotated[MRIUploadService, Depends(get_upload_service)],
     t1: Annotated[UploadFile, File(description="T1 NIfTI")],
     t1ce: Annotated[UploadFile, File(description="T1ce NIfTI")],
@@ -104,7 +117,9 @@ async def upload_mri(
             MRIModality.FLAIR: flair,
         },
         case_id=case_id,
+        owner_id=principal_for(request),
     )
+    audit_event("case_uploaded", request, case_id=uploaded.case_id)
     return UploadResponse(
         case_id=uploaded.case_id,
         status="uploaded",
@@ -120,19 +135,23 @@ async def upload_mri(
 )
 def analyze_mri(
     payload: AnalyzeRequest,
+    request: Request,
     repository: Annotated[CaseRepository, Depends(get_case_repository)],
     tasks: Annotated[
         AnalysisTaskRepository,
         Depends(get_analysis_task_repository),
     ],
 ) -> AnalyzeResponse:
-    repository.require_case(payload.case_id)
+    require_case_access(repository, payload.case_id, request)
     if (
         repository.read_status(payload.case_id).get("status") == "analyzing"
         and tasks.find_active_for_case(payload.case_id) is None
     ):
         _restore_idle_case_status(repository, payload.case_id)
-    task, created = tasks.create(payload.case_id)
+    task, created = tasks.create(
+        payload.case_id,
+        owner_id=principal_for(request),
+    )
     if created:
         if not _analysis_worker_available():
             tasks.update(
@@ -176,6 +195,7 @@ def _task_response(
     request: Request,
 ) -> AnalysisTaskResponse:
     payload = dict(task)
+    payload.pop("owner_id", None)
     payload["result_url"] = (
         str(request.url_for("restore_case", case_id=task["case_id"]))
         if task["status"] == "succeeded"
@@ -196,8 +216,11 @@ def get_analysis_task(
         AnalysisTaskRepository,
         Depends(get_analysis_task_repository),
     ],
+    repository: Annotated[CaseRepository, Depends(get_case_repository)],
 ) -> AnalysisTaskResponse:
-    return _task_response(tasks.get(task_id), request)
+    task = tasks.get(task_id)
+    require_case_access(repository, str(task["case_id"]), request)
+    return _task_response(task, request)
 
 
 @router.post(
@@ -215,6 +238,7 @@ def cancel_analysis_task(
     ],
 ) -> AnalysisTaskResponse:
     task = tasks.get(task_id)
+    require_case_access(repository, str(task["case_id"]), request)
     if task["status"] == "queued":
         task = tasks.update(
             task_id,
@@ -245,8 +269,11 @@ def cancel_analysis_task(
 )
 def generate_report(
     payload: ReportRequest,
+    request: Request,
+    repository: Annotated[CaseRepository, Depends(get_case_repository)],
     service: Annotated[MedicalReportService, Depends(get_report_service)],
 ) -> ReportResponse:
+    require_case_access(repository, payload.case_id, request)
     generated = service.generate(payload.case_id)
     return ReportResponse(
         case_id=payload.case_id,
@@ -270,6 +297,7 @@ def restore_case(
         Depends(get_analysis_task_repository),
     ],
 ) -> CaseRestoreResponse:
+    require_case_access(repository, case_id, request)
     paths = repository.require_case(case_id)
     status = repository.read_status(case_id)
     raw_modalities = status.get("modalities", {})
@@ -322,6 +350,7 @@ def restore_case(
 def download_modality(
     case_id: str,
     modality: str,
+    request: Request,
     repository: Annotated[CaseRepository, Depends(get_case_repository)],
 ) -> FileResponse:
     try:
@@ -330,6 +359,7 @@ def download_modality(
         from backend.app.services.errors import InvalidUploadError
 
         raise InvalidUploadError("不支持的MRI模态") from exc
+    require_case_access(repository, case_id, request)
     paths = repository.require_case(case_id)
     status = repository.read_status(case_id)
     filename = status.get("modalities", {}).get(normalized_modality.value)
@@ -356,10 +386,13 @@ def download_modality(
 )
 def propose_report_edit(
     payload: ReportEditRequest,
+    request: Request,
+    repository: Annotated[CaseRepository, Depends(get_case_repository)],
     service: Annotated[
         MedicalReportEditingService, Depends(get_report_editing_service)
     ],
 ) -> ReportEditResponse:
+    require_case_access(repository, payload.case_id, request)
     proposal = service.propose(payload.case_id, payload.instruction)
     return ReportEditResponse(
         case_id=payload.case_id,
@@ -379,10 +412,13 @@ def propose_report_edit(
 )
 def apply_report_edit(
     payload: ReportApplyRequest,
+    request: Request,
+    repository: Annotated[CaseRepository, Depends(get_case_repository)],
     service: Annotated[
         MedicalReportEditingService, Depends(get_report_editing_service)
     ],
 ) -> ReportApplyResponse:
+    require_case_access(repository, payload.case_id, request)
     result = service.apply(payload.case_id, payload.suggestion_id)
     return ReportApplyResponse(
         case_id=payload.case_id,
@@ -399,8 +435,12 @@ def apply_report_edit(
 )
 def chat_with_agent(
     payload: ChatRequest,
+    request: Request,
+    repository: Annotated[CaseRepository, Depends(get_case_repository)],
     service: Annotated[MedicalAgentChatService, Depends(get_chat_service)],
 ) -> ChatResponse:
+    if payload.case_id:
+        require_case_access(repository, payload.case_id, request)
     response = service.chat(
         question=payload.question,
         case_id=payload.case_id,
@@ -425,8 +465,10 @@ def chat_with_agent(
 )
 def download_mask(
     case_id: str,
+    request: Request,
     repository: Annotated[CaseRepository, Depends(get_case_repository)],
 ) -> FileResponse:
+    require_case_access(repository, case_id, request)
     paths = repository.require_case(case_id)
     if not paths.mask.is_file():
         from backend.app.services.errors import CaseStateError

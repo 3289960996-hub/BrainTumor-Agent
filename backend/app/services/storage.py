@@ -23,6 +23,7 @@ from backend.app.services.errors import (
 )
 
 CASE_ID_REGEX = re.compile(CASE_ID_PATTERN)
+DEFAULT_OWNER_ID = "default-client"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +83,12 @@ class CaseRepository:
             metadata=root / "case.json",
         )
 
-    def create_case(self, case_id: str | None = None) -> CasePaths:
+    def create_case(
+        self,
+        case_id: str | None = None,
+        *,
+        owner_id: str = DEFAULT_OWNER_ID,
+    ) -> CasePaths:
         resolved_id = self.validate_case_id(case_id) if case_id else self.new_case_id()
         paths = self.paths(resolved_id)
         if paths.root.exists():
@@ -94,7 +100,10 @@ class CaseRepository:
         self.write_status(
             resolved_id,
             "uploading",
-            extra={"created_at": datetime.now(UTC).isoformat()},
+            extra={
+                "created_at": datetime.now(UTC).isoformat(),
+                "owner_id": owner_id,
+            },
         )
         return paths
 
@@ -220,7 +229,12 @@ class CaseRepository:
             raise InvalidUploadError("报告修改建议格式无效")
         return payload
 
-    def list_cases(self, *, analyzed_only: bool = False) -> list[dict[str, Any]]:
+    def list_cases(
+        self,
+        *,
+        analyzed_only: bool = False,
+        owner_id: str = DEFAULT_OWNER_ID,
+    ) -> list[dict[str, Any]]:
         """Return de-identified case summaries without reading MRI payloads."""
 
         summaries: list[dict[str, Any]] = []
@@ -235,6 +249,8 @@ class CaseRepository:
             except (OSError, json.JSONDecodeError):
                 continue
             if not isinstance(payload, dict):
+                continue
+            if payload.get("owner_id", DEFAULT_OWNER_ID) != owner_id:
                 continue
             case_id = payload.get("case_id")
             if not isinstance(case_id, str) or not CASE_ID_REGEX.fullmatch(case_id):
@@ -293,11 +309,17 @@ class AnalysisTaskRepository:
             raise InvalidUploadError("分析任务路径不合法")
         return target
 
-    def create(self, case_id: str) -> tuple[dict[str, Any], bool]:
+    def create(
+        self,
+        case_id: str,
+        *,
+        owner_id: str = DEFAULT_OWNER_ID,
+    ) -> tuple[dict[str, Any], bool]:
         now = datetime.now(UTC).isoformat()
         payload: dict[str, Any] = {
             "task_id": f"task-{uuid.uuid4().hex}",
             "case_id": case_id,
+            "owner_id": owner_id,
             "status": "queued",
             "stage": "queued",
             "progress": 0,

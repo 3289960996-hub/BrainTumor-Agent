@@ -516,7 +516,10 @@ def test_regenerated_report_clears_stale_marker(tmp_path: Path) -> None:
     assert status["report_stale"] is False
 
 
-def test_report_returns_assisted_report() -> None:
+def test_report_returns_assisted_report(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    repository.create_case("case-report")
+    app.dependency_overrides[get_case_repository] = lambda: repository
     app.dependency_overrides[get_report_service] = lambda: FakeReportService()
 
     response = TestClient(app).post(
@@ -547,6 +550,7 @@ def test_report_edit_requires_confirmation_and_preserves_revision(tmp_path: Path
             )
 
     service = MedicalReportEditingService(repository, editor=FakeEditor())
+    app.dependency_overrides[get_case_repository] = lambda: repository
     app.dependency_overrides[get_report_editing_service] = lambda: service
     response = TestClient(app).post(
         "/api/v1/report/edit",
@@ -585,7 +589,10 @@ class FakeChatService:
         )
 
 
-def test_chat_returns_agent_answer() -> None:
+def test_chat_returns_agent_answer(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "data")
+    repository.create_case("case-chat")
+    app.dependency_overrides[get_case_repository] = lambda: repository
     app.dependency_overrides[get_chat_service] = lambda: FakeChatService()
 
     response = TestClient(app).post(

@@ -16,6 +16,7 @@ from backend.app.services.dependencies import (
     get_longitudinal_comparison_service,
 )
 from backend.app.services.errors import TaskQueueUnavailableError
+from backend.app.services.security import authenticate_request, require_case_access
 from backend.app.tasks.celery_app import celery_app
 from longitudinal.service import (
     LongitudinalComparisonService,
@@ -23,7 +24,7 @@ from longitudinal.service import (
 )
 from longitudinal.storage import ComparisonTaskRepository
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(authenticate_request)])
 
 
 def _worker_available() -> bool:
@@ -68,6 +69,8 @@ def create_comparison_task(
         Depends(get_comparison_task_repository),
     ],
 ) -> ComparisonTaskResponse:
+    require_case_access(service.cases, payload.baseline_case_id, request)
+    require_case_access(service.cases, payload.followup_case_id, request)
     service.validate_request(
         baseline_case_id=payload.baseline_case_id,
         followup_case_id=payload.followup_case_id,
@@ -134,8 +137,17 @@ def get_comparison_task(
         ComparisonTaskRepository,
         Depends(get_comparison_task_repository),
     ],
+    service: Annotated[
+        LongitudinalComparisonService,
+        Depends(get_longitudinal_comparison_service),
+    ],
 ) -> ComparisonTaskResponse:
-    return _task_response(tasks.get(task_id), request)
+    task = tasks.get(task_id)
+    task_request = task.get("request", {})
+    if isinstance(task_request, dict):
+        require_case_access(service.cases, str(task_request["baseline_case_id"]), request)
+        require_case_access(service.cases, str(task_request["followup_case_id"]), request)
+    return _task_response(task, request)
 
 
 @router.post(
@@ -150,8 +162,16 @@ def cancel_comparison_task(
         ComparisonTaskRepository,
         Depends(get_comparison_task_repository),
     ],
+    service: Annotated[
+        LongitudinalComparisonService,
+        Depends(get_longitudinal_comparison_service),
+    ],
 ) -> ComparisonTaskResponse:
     task = tasks.get(task_id)
+    task_request = task.get("request", {})
+    if isinstance(task_request, dict):
+        require_case_access(service.cases, str(task_request["baseline_case_id"]), request)
+        require_case_access(service.cases, str(task_request["followup_case_id"]), request)
     if task["status"] == "queued":
         task = tasks.update(
             task_id,
@@ -187,6 +207,8 @@ def create_comparison(
         Depends(get_longitudinal_comparison_service),
     ],
 ) -> ComparisonResponse:
+    require_case_access(service.cases, payload.baseline_case_id, request)
+    require_case_access(service.cases, payload.followup_case_id, request)
     result = service.create(
         patient_group_id=payload.patient_group_id,
         baseline_case_id=payload.baseline_case_id,
@@ -210,9 +232,10 @@ def get_comparison(
         Depends(get_longitudinal_comparison_service),
     ],
 ) -> ComparisonResponse:
-    return ComparisonResponse.model_validate(
-        _with_artifact_urls(service.get(comparison_id), request)
-    )
+    result = service.get(comparison_id)
+    require_case_access(service.cases, str(result["baseline_case_id"]), request)
+    require_case_access(service.cases, str(result["followup_case_id"]), request)
+    return ComparisonResponse.model_validate(_with_artifact_urls(result, request))
 
 
 @router.get(
@@ -224,11 +247,15 @@ def get_comparison(
 def download_comparison_artifact(
     comparison_id: str,
     artifact_key: str,
+    request: Request,
     service: Annotated[
         LongitudinalComparisonService,
         Depends(get_longitudinal_comparison_service),
     ],
 ) -> FileResponse:
+    result = service.get(comparison_id)
+    require_case_access(service.cases, str(result["baseline_case_id"]), request)
+    require_case_access(service.cases, str(result["followup_case_id"]), request)
     target = service.comparisons.artifact(comparison_id, artifact_key)
     media_type = "application/gzip" if target.name.endswith(".nii.gz") else "text/plain"
     return FileResponse(path=target, media_type=media_type, filename=target.name)

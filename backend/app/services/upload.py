@@ -11,7 +11,7 @@ import nibabel as nib
 from fastapi import UploadFile
 
 from backend.app.services.errors import InvalidUploadError
-from backend.app.services.storage import CaseRepository
+from backend.app.services.storage import CaseRepository, DEFAULT_OWNER_ID
 from data_process.constants import MRIModality
 
 
@@ -41,6 +41,8 @@ class MRIUploadService:
         self,
         uploads: Mapping[MRIModality, UploadFile],
         case_id: str | None = None,
+        *,
+        owner_id: str = DEFAULT_OWNER_ID,
     ) -> UploadedCase:
         expected = set(MRIModality)
         if set(uploads) != expected:
@@ -53,7 +55,7 @@ class MRIUploadService:
                     f"不能作为{modality.value}上传"
                 )
 
-        paths = self.repository.create_case(case_id)
+        paths = self.repository.create_case(case_id, owner_id=owner_id)
         saved: dict[str, str] = {}
         sizes: dict[str, int] = {}
         try:

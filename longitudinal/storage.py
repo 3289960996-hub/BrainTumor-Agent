@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
+import time
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -27,6 +29,33 @@ ARTIFACT_FILENAMES = {
     "et_change": "et_change.nii.gz",
 }
 
+_REPLACE_ATTEMPTS = 8
+_REPLACE_RETRY_SECONDS = 0.02
+
+
+def _write_json_atomic(target: Path, payload: Mapping[str, Any]) -> None:
+    """Write JSON atomically while tolerating short-lived Windows file locks."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    try:
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                os.replace(temporary, target)
+                return
+            except OSError as exc:
+                is_windows_lock = isinstance(exc, PermissionError) or getattr(
+                    exc, "winerror", None
+                ) in {5, 32}
+                if not is_windows_lock or attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_RETRY_SECONDS * (2**attempt))
+    finally:
+        temporary.unlink(missing_ok=True)
+
 
 class ComparisonRepository:
     """Store comparison records outside individual case directories."""
@@ -44,13 +73,7 @@ class ComparisonRepository:
 
     def save(self, comparison_id: str, payload: Mapping[str, Any]) -> Path:
         target = self._path(comparison_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(target)
+        _write_json_atomic(target, payload)
         return target
 
     def artifact_dir(self, comparison_id: str) -> Path:
@@ -185,9 +208,4 @@ class ComparisonTaskRepository:
     def _write(self, payload: Mapping[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         target = self._path(str(payload["task_id"]))
-        temporary = target.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(target)
+        _write_json_atomic(target, payload)

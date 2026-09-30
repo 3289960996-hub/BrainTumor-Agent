@@ -3,17 +3,25 @@
 基于多模态MRI、nnU-Net、医学知识库RAG和Qwen-plus的脑肿瘤智能辅助分析项目。
 
 当前版本已实现BraTS 2021四模态数据处理与阅片、nnU-Net V2训练/推理/评估、
-分割定量分析、Qwen-plus辅助报告与医生确认式编辑、多语言Embedding + FAISS医学
-知识库，以及由LangGraph编排的MRI Assistant Agent。FastAPI与React已接通上传、
-异步分析、任务恢复、进度/取消、病例恢复、报告、问答和证据引用的完整流程。
+分割定量分析、SimpleITK多时相刚性配准与变化Mask、Qwen-plus辅助报告与医生确认式
+编辑、多语言Embedding + FAISS医学知识库，以及由LangGraph编排的MRI Assistant
+Agent。FastAPI、Celery与React已接通上传、异步分析、任务恢复、进度/取消、病例
+恢复、随访对比、报告、问答和证据引用的完整流程。
 
 > 本项目当前仅用于科研和教学，不作为独立临床诊断依据。
 
 ## 界面预览
 
-| 影像工作台 | 医学助手 |
+| 影像工作台 | 多时相随访对比 |
 | --- | --- |
-| ![四模态MRI阅片、Mask叠加与定量指标](docs/images/workbench.png) | ![辅助报告与医生确认式编辑](docs/images/medical-assistant.png) |
+| ![四模态MRI阅片、Mask叠加与定量指标](docs/images/workbench.png) | ![检查日期、WT/TC/ET确定性变化与配准质量门控](docs/images/longitudinal-comparison.png) |
+
+**医学助手：辅助报告、医生确认式编辑与证据入口**
+
+![辅助报告与医生确认式编辑](docs/images/medical-assistant.png)
+
+随访对比采用质量门控：定量变化始终由确定性代码计算；当配准后影像相关性或脑区
+重叠未达阈值时，系统保留定量表格并主动停止空间变化结论，避免展示不可靠的变化Mask。
 
 演示操作见[`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)，系统设计见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
@@ -40,7 +48,7 @@
 - Python 3.11。
 - Node.js 20或更高版本。
 - NVIDIA GPU与项目所选PyTorch版本兼容的CUDA驱动。
-- Redis和PostgreSQL；只运行当前健康检查时可以暂不启动。
+- Redis兼容服务（Redis或Memurai）；一键启动脚本也可在本机服务不可用时回退到Docker Redis。
 
 在Windows原生环境中，FAISS和部分医学影像依赖可能缺少合适的预编译包。计划进行nnU-Net训练或GPU推理时，优先使用WSL2、Linux服务器或容器环境。
 
