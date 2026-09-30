@@ -1,0 +1,5 @@
+# 开发与验证依赖：运行时不需要这些包（见 requirements.txt）。
+-r requirements.txt
+pytest>=8.3,<9.0
+ruff>=0.9,<1.0
+mypy>=1.14,<2.0

@@ -1,3 +1,7 @@
+# 设计参考文档：代码不会读取本文件。
+# 实际生效的配置来自环境变量与项目根目录的 .env（字段定义见
+# backend/app/core/config.py 的 Settings），本文件只用于记录非敏感默认值的口径。
+# 与代码默认值重叠的键由 backend/tests/test_config_consistency.py 守护，避免漂移。
 application:
   name: BrainTumor-Agent
   version: 0.1.0

@@ -54,7 +54,8 @@ NNUNET_ROOT=./runtime/nnunet
 BTA_NNUNET_DEVICE=cuda
 BTA_NNUNET_GPU_ID=0
 DASHSCOPE_API_KEY=
-BTA_FAISS_INDEX_PATH=./runtime/knowledge/faiss
+BTA_FAISS_INDEX_PATH=./runtime/faiss
+BTA_EMBEDDING_DEVICE=cpu
 ```
 
 `NNUNET_ROOT/nnUNet_results`中必须已有与dataset、trainer、plans、fold和checkpoint配置

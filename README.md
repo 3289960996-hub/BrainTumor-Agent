@@ -62,6 +62,7 @@ Agent。FastAPI、Celery与React已接通上传、异步分析、任务恢复、
 4. 升级安装工具：`python -m pip install --upgrade pip`
 5. 根据目标CUDA版本安装官方PyTorch构建。
 6. 安装其余依赖：`pip install -r requirements.txt`
+7. 需要跑测试和静态检查时，再安装开发依赖：`pip install -r requirements-dev.txt`
 
 复制环境变量模板：
 
@@ -239,6 +240,8 @@ CC BY 4.0授权的EANO成人弥漫性胶质瘤指南（2021），使用CPU轻量
 
 ## 基础验证
 
+以下命令需要先安装开发依赖：`pip install -r requirements-dev.txt`。
+
 - Python测试：`pytest`
 - 仅测试数据处理：`pytest data_process/tests -q`
 - 仅测试MRI Assistant：`pytest agent/tests -q`
@@ -248,7 +251,9 @@ CC BY 4.0授权的EANO成人弥漫性胶质瘤指南（2021），使用CPU轻量
 ## 配置约定
 
 - `.env`保存环境相关配置和密钥，不进入Git。
-- `configs/app.yaml`记录非敏感、可版本化的业务默认值。
+- `configs/app.yaml`只作为设计参考文档，**代码不读取它**；实际生效值来自环境变量与
+  `.env`，字段定义见`backend/app/core/config.py`。
+  `backend/tests/test_config_consistency.py`会校验它与代码默认值不漂移。
 - 模型名称、数据路径、知识索引版本和外部服务地址必须配置化。
 - 生产环境的密钥应由Secret Manager或部署平台注入。
 - `BTA_API_KEY`只存在于服务端：后端校验它，前端开发服务器（`frontend/.env.local`
