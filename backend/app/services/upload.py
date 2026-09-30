@@ -11,7 +11,7 @@ import nibabel as nib
 from fastapi import UploadFile
 
 from backend.app.services.errors import InvalidUploadError
-from backend.app.services.storage import CaseRepository, DEFAULT_OWNER_ID
+from backend.app.services.storage import DEFAULT_OWNER_ID, CaseRepository
 from data_process.constants import MRIModality
 
 

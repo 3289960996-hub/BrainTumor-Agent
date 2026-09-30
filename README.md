@@ -91,9 +91,13 @@ Windows日常使用无需输入命令：打开项目根目录的`启停/`文件�
 
 PowerShell中建议显式使用项目虚拟环境，避免误调用系统Python：
 
-`.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000`
+`.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000`
 
-也可以直接运行`.\scripts\start_backend.ps1`。
+也可以直接运行`.\scripts\start_backend.ps1`（默认同样只绑定`127.0.0.1`）。
+
+不要改成`--host 0.0.0.0`：后端接口凭`BTA_API_KEY`认证，把未受控网络直接暴露在
+端口上会让任何能连上的人拿到上传、报告和病例读取能力。需要跨机访问时，请在反向
+代理层做认证与TLS，再由代理注入`X-API-Key`。
 
 MRI分析使用Redis和单并发Celery Worker。启动Redis后另开终端运行
 `.\scripts\start_worker.ps1`。API提交分析后立即返回`task_id`，任务状态持久化在
@@ -247,6 +251,9 @@ CC BY 4.0授权的EANO成人弥漫性胶质瘤指南（2021），使用CPU轻量
 - `configs/app.yaml`记录非敏感、可版本化的业务默认值。
 - 模型名称、数据路径、知识索引版本和外部服务地址必须配置化。
 - 生产环境的密钥应由Secret Manager或部署平台注入。
+- `BTA_API_KEY`只存在于服务端：后端校验它，前端开发服务器（`frontend/.env.local`
+  中的`BTA_API_KEY`）或生产反向代理负责在服务端注入`X-API-Key`请求头。
+  不要把密钥写进任何`VITE_`前缀变量——那会被打包进浏览器代码，等于公开。
 
 ## 许可证
 

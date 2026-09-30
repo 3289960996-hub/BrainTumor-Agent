@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING
 from fastapi import Request
 
 from backend.app.core.config import get_settings
-from backend.app.services.errors import AuthenticationError, CaseNotFoundError, ServiceConfigurationError
+from backend.app.services.errors import (
+    AuthenticationError,
+    CaseNotFoundError,
+    ServiceConfigurationError,
+)
 
 if TYPE_CHECKING:
     from backend.app.services.storage import CaseRepository

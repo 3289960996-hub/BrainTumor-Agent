@@ -23,7 +23,7 @@ React + Vite医生端演示界面，对接FastAPI默认接口前缀`/api/v1`。
 ```powershell
 .venv\Scripts\python.exe -m uvicorn backend.app.main:app `
   --reload `
-  --host 0.0.0.0 `
+  --host 127.0.0.1 `
   --port 8000
 ```
 
@@ -38,7 +38,21 @@ npm run dev
 访问`http://localhost:5173`。开发服务器会将`/api`代理到
 `http://localhost:8000`。
 
-如前后端部署在不同域名，可创建`frontend/.env.local`：
+### API密钥与跨域部署
+
+浏览器端**不持有**`BTA_API_KEY`。开发/预览服务器在服务端注入请求头：
+
+```dotenv
+# frontend/.env.local（不带VITE_前缀，不会被内联进浏览器代码）
+BTA_API_KEY=与后端.env中相同的值
+```
+
+`vite.config.js`读取该变量，并由`/api`代理加上`X-API-Key`。**不要**使用
+`VITE_API_KEY`等`VITE_`前缀变量：它们会被打包进浏览器产物，任何打开页面的人
+都能读出密钥。
+
+前后端部署在不同域名时，同样不要让浏览器持有密钥，应由反向代理注入
+`X-API-Key`：
 
 ```dotenv
 VITE_API_BASE_URL=https://your-api.example.com/api/v1
