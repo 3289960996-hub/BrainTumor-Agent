@@ -22,7 +22,7 @@ DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 # 只拦截直接确诊式表达；审慎的“影像表现提示”不会命中。
 FORBIDDEN_DIAGNOSIS_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:明确|最终|临床)?诊断为"),
-    re.compile(r"(?:可以|可|已经|已)?确诊为?"),
+    re.compile(r"(?<![不未难])确诊(?:为|是)"),
     re.compile(r"考虑为(?:胶质|脑膜|转移|淋巴|生殖细胞|室管膜)"),
     re.compile(r"符合.{0,20}(?:疾病|肿瘤).{0,10}诊断"),
     re.compile(r"WHO\s*[ⅠIⅡVⅢIV1-4]+级", re.IGNORECASE),
